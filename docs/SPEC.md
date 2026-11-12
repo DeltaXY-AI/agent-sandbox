@@ -2,7 +2,7 @@
 
 > Status: spec agreed with Satish, Nov 12, 2026. Code not started.
 > Purpose: curiosity. Learn what it takes to build a platform like Agent37 (https://www.agent37.com/docs/agents-api/examples). No customer, no revenue target.
-> Licence: Apache-2.0. Repository: `C:\code\agent-sandbox` (public, DeltaXY GitHub org - not yet pushed).
+> Licence: Apache-2.0. Repository: `C:\code\agent-sandbox` (public, https://github.com/DeltaXY-AI/agent-sandbox).
 
 ---
 
@@ -22,6 +22,14 @@
 | 9 | Phase 1 proof | The acceptance script (section 7) passes on Pi, eve and Claude Code. |
 | 10 | Time box | 4 weekends. Checkpoint after weekend 2. |
 | 11 | Visibility | Open source from day 1. |
+| 12 | Instance ops (PATCH, update, resize, disk size, mount_path, types) | Phase 2. |
+| 13 | Network and access (per-port URLs, network allow/deny, signed URLs, custom domains, SSH) | Phase 1. |
+| 14 | Agent API details (reasoning_effort, request limits, replay buffer limits, version pinning) | Phase 1. |
+| 15 | Accounts (per-instance budgets, instance limits, members, signup) | Phase 2. |
+| 16 | Extra templates (Hermes + profiles, OpenClaw, Grok, n8n, Ubuntu VM, Android VM) | Phase 2. |
+| 17 | Services | BYO model and Composio keys in Phase 1. Managed services (LLM router, Brave, Composio, Perflo) in Phase 2. |
+| 18 | Integrations | Headless browser in Phase 1. Desktop, app integrations, messaging channels in Phase 2. |
+| 19 | Tooling | TypeScript SDK in Phase 1. Python SDK, starter kit, white-label, outside agent loops in Phase 2. |
 
 ---
 
@@ -166,7 +174,8 @@ Any state -> `failed`. `deleting -> deleted`.
 | **Weekend 2 - checkpoint** | **One template passes acceptance steps 1-5.** If not: decide to continue, switch to Docker + gVisor, or stop. |
 | Weekend 3 | Pi and eve adapters. Fork, sleep and wake, public ports. Keys and meter. |
 | Weekend 4 | All three templates pass the full acceptance script. First cloud experiment (KVM check on Hetzner and DigitalOcean). |
-| Phase 2 | Remaining `sbx` harnesses, backups, crons, metrics, profiles, regions, custom images, wallet. |
+| Phase 2 | Remaining `sbx` harnesses, backups, crons, metrics, profiles, regions, custom images, wallet. Decisions 12, 15, 16 and the Phase 2 parts of 17-19. |
+| Not yet placed in a weekend | Phase 1 additions from decisions 13, 14 and the Phase 1 parts of 17-19. |
 
 ---
 
@@ -232,7 +241,7 @@ Installed on Satish's laptop: `sbx version v0.50.1`. These are read from `sbx --
 
 ## 10. Docs in this repo
 
-`README.md`, `AGENTS.md` (for coding agents), `docs/SPEC.md` (this file), `docs/TESTING.md` (section 7 as a checklist; becomes an executable script). Linting config instead of a style doc. `docs/ARCHITECTURE.md` after weekend 2.
+`README.md`, `AGENTS.md` (for coding agents), `docs/SPEC.md` (this file), `docs/PRD.md` (product view of this spec), `docs/TESTING.md` (section 7 as a checklist; becomes an executable script). Linting config instead of a style doc. `docs/ARCHITECTURE.md` after weekend 2.
 
 ---
 

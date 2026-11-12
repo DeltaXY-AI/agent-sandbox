@@ -33,6 +33,7 @@ Templates in Phase 1: **Claude Code, Pi, eve**. More harnesses in Phase 2.
 ## Docs
 
 - [docs/SPEC.md](docs/SPEC.md) - the full build spec and decisions.
+- [docs/PRD.md](docs/PRD.md) - what the product is, who it is for, and what Phase 1 includes.
 - [docs/TESTING.md](docs/TESTING.md) - the acceptance script that defines "done".
 - [AGENTS.md](AGENTS.md) - instructions for coding agents working in this repo.
 
