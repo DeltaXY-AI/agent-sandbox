@@ -34,6 +34,8 @@
 | 21 | Model access (Nov 12) | Vercel AI Gateway, one key (`AI_GATEWAY_API_KEY`). Default model `deepseek/deepseek-v4.1-flash`, set by config, overridable per request. The key reaches the sandbox only through `sbx secret set-custom` (the VM sees a placeholder). |
 | 22 | Stack (Nov 12) | Node 24 (runs `.ts` directly), Hono 4 + `@hono/node-server`, zod 4, TypeScript 7 (`tsc --noEmit`), Vitest 5, ESLint + Prettier. State in memory until a store is needed. |
 | 23 | Base distro (Nov 12) | Ubuntu (the `sbx` `shell` image). Alpine is a later measured experiment. |
+| 24 | Weekend 2 checkpoint template (Nov 12) | fx. Acceptance steps 1-5 (streaming, reattach, files API) are built and proven on fx. Pi, eve and Claude Code are added later as adapters on top of the same features; decision 9 still defines the Phase 1 proof. |
+| 25 | Deployment (Nov 12) | Immutable: `deploy/cloud-init.yaml` (cloud-independent host recipe, no secrets) plus one script per cloud (`scripts/deploy-do.ts`). Every deploy builds a new server, tests it, then retires the old one. Secrets go over SSH after boot. |
 
 ---
 
@@ -255,6 +257,18 @@ Droplet `s-4vcpu-8gb` in `blr1`. The unchanged code, `npm run smoke`, the fx tem
 | Network policy | First create fails with `global network policy has not been initialized`. `sbx policy init allow-all` matches the Windows laptop default. |
 | Daemon | `sbx daemon start` stays in the foreground. Run it as a systemd service (`User=sandbox`). |
 | Timings | First base create 61 s (image pull). After that: create about 8 s, exec 0.3-0.8 s, exec on a stopped sandbox 4.8 s, fx template build 30.5 s, first fx turn about 10 s. |
+
+### Weekend 2 spike: where fx streaming events can come from (fx 0.0.16, sbx v0.50.1, Nov 12, 2026)
+
+`fx ask` has no streaming JSON mode (`fx ask --help`): `--json` prints one object at the end. Two live sources were measured during a hello.py turn:
+
+| Source | What it gives | Verdict |
+|---|---|---|
+| fx plain mode (no `--json`) | stdout: raw assistant Markdown in small chunks as it is written (real text deltas). stderr: progress lines such as `Writing /home/agent/hello.py`, `Running python3 ./hello.py; echo "exit: $?"`, then the command output. No reasoning, no tool call ids, tool names only as free text. | Text only; tool events would mean parsing prose. |
+| The gateway relay (`templates/fx/gateway-relay.mjs`) | Every model call is `POST /v4/ai/language-model`, answered as SSE with typed AI SDK stream parts: `stream-start`, `response-metadata`, `reasoning-start/delta/end`, `text-start/delta/end`, `tool-input-start/delta/end` (with `toolName` and call `id`), `tool-call` (full input), `finish` (usage). The next request's `prompt` holds each `tool-result` by `toolCallId`; a failed command has `output.type: "error-text"` (for `shell`, a JSON value with `exit_code`). | All 9 events can be derived. |
+| Side requests | fx also sends a small request with no `tools` (title generation, a different model) and `GET /coding-agent/v1/models`. | Must be ignored when mapping events. |
+
+Mapping from the relay: text-delta -> `response.output_text.delta`; reasoning-delta -> `response.reasoning.delta`; tool-input-start/delta -> `response.tool_call.generating`; tool-call -> `response.tool_call.started`; tool-result in the next request -> `response.tool_call.completed` or `.failed`. `response.created`, `response.completed` and `response.failed` come from the adapter (turn start, fx exit and `--json` result).
 
 ### Still open (answer by running code)
 
