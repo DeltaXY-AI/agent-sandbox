@@ -10,7 +10,7 @@ A TypeScript platform that runs AI agents in Docker Sandboxes microVMs behind on
 
 Weekend 1 done (Nov 12, 2026): Sandbox API (`base` template) and non-streaming `/v1/responses` on the `fx` template, routed by `{id}.localhost`.
 
-Weekend 2 checkpoint passed on fx (Nov 12, 2026): streamed turns with the 9 SSE events, reattach with `Last-Event-ID`, files API (`GET /v1/files`, `GET /v1/files/content`). `npm run acceptance` runs TESTING.md steps 1-5. Not yet built: file writes (PUT, DELETE, PATCH, dir, archive), cancel, WebSocket proxying, fork (after the engine switch), wallet and prices, Pi/eve/Claude Code adapters.
+Weekend 2 checkpoint passed on fx (Nov 12, 2026): streamed turns with the 9 SSE events, reattach with `Last-Event-ID`, files API (`GET /v1/files`, `GET /v1/files/content`). `npm run acceptance` runs TESTING.md steps 1-5. Not yet built: file writes (PUT, DELETE, PATCH, dir, archive), cancel, WebSocket proxying, fork (after the engine switch), wallet and prices, eve and Claude Code adapters.
 
 Sleep and wake (Nov 12, 2026): `POST /v1/instances/{id}/sleep`, idle timer (`idle_timeout_seconds`, default 900), any request wakes a sleeping instance; stopped stays off until `/start`. Acceptance step 8 passes on fx.
 
@@ -19,6 +19,8 @@ Public ports (Nov 12, 2026): preview URLs `{id}-{port}.localhost` (API key, `X-A
 Workspaces and keys (Nov 12, 2026): SQLite store (`data/agent-sandbox.db`), admin API `/v1/admin/workspaces` (admin key), `sk_live_` keys scoped to a workspace, `AGENT_SANDBOX_API_KEY` = default workspace. Every sandbox is denied the host loopback. Acceptance step 9 passes on fx.
 
 Meter (Nov 12, 2026): `GET /v1/usage` (awake and sleeping minutes, turns and tokens per instance, day and model; no prices yet) and `GET /v1/instances/{id}/events`, from state changes and turn usage kept in SQLite. Acceptance step 10 passes on fx.
+
+Pi (Nov 12, 2026): template `pi` (Pi 1.5.2, `pi --mode json` through the AI Gateway). `TEMPLATE=pi npm run acceptance` passes steps 1-6 and 8-10, as fx does.
 
 ## Rules
 
@@ -41,6 +43,7 @@ Node 24 runs the `.ts` files directly; there is no build step. Secrets go in `.e
 | `npm run check` | Typecheck (`tsc`), lint, unit tests. Run before reporting work as done. |
 | `npm start` | Control plane on `http://localhost:3000`. |
 | `node scripts/build-fx-template.ts` | Build the `fx` sbx template (needed once, and after changing `templates/fx/`). |
+| `node scripts/build-pi-template.ts` | Build the `pi` sbx template (needed once, and after changing `PI_VERSION`). |
 | `npm run smoke` | Drive `sbx` from Node: create, exec, stop, auto-start, delete. |
 | `npm run acceptance` | TESTING.md steps 1-6 and 8-10 against a running server: create, streamed turn, disconnect and reattach, files API, exec, public ports, sleep and wake, workspaces and isolation, usage. Step 9 needs `AGENT_SANDBOX_ADMIN_KEY`. `TEMPLATE` (default fx), `PORT`. Costs a few model tokens. |
 | `node --env-file=.env scripts/demo-sandbox-api.ts` | Sandbox API demo (server must be running). |

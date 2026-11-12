@@ -377,7 +377,7 @@ try {
   // session files survive sleep?
   console.log("\n== step 8: sleep and wake");
   const STATE =
-    "ls /usr/local/bin/acceptance-marker; find ~/.fx -type f 2>/dev/null | wc -l | tr -d ' '";
+    "ls /usr/local/bin/acceptance-marker; find ~/.fx ~/.pi -type f 2>/dev/null | wc -l | tr -d ' '";
   await api("POST", `/v1/instances/${id}/exec`, {
     command: "echo installed > /usr/local/bin/acceptance-marker",
     user: "root",
@@ -412,7 +412,7 @@ try {
     marker === "/usr/local/bin/acceptance-marker" &&
       Number(afterFx) >= Number(beforeFx) &&
       Number(beforeFx) > 0,
-    `marker ${marker ? "kept" : "lost"}, fx files ${beforeFx} -> ${afterFx}`,
+    `marker ${marker ? "kept" : "lost"}, harness files ${beforeFx} -> ${afterFx}`,
   );
 
   // Step 10: /v1/usage shows running minutes, sleeping minutes and tokens for the sandbox.

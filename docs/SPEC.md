@@ -43,6 +43,7 @@
 | 30 | Workspaces and keys (Nov 12) | Workspaces own instances; `sk_live_` API keys belong to a workspace and act only inside it (another workspace's instance is 404, as on Agent37). Another system (sign-up, billing) creates workspaces and keys through the admin API, guarded by `AGENT_SANDBOX_ADMIN_KEY`. `AGENT_SANDBOX_API_KEY` is the key of a built-in default workspace. Durable state moves to SQLite (Node's built-in `node:sqlite`, `DATABASE_PATH`, default `data/agent-sandbox.db`): workspaces, key hashes (the plain key is shown once), instance records (owner, template, agent key, settings) and server secrets. Sessions and replay buffers stay in memory. This replaces decision 22's in-memory state for these. |
 | 31 | Sandbox network isolation (Nov 12) | Every sandbox is denied `host.docker.internal`, `localhost` and `127.0.0.0/8` (per-sandbox `sbx policy deny network`), so it cannot reach other sandboxes' published ports or the control plane. Creation fails if the rules cannot be set. |
 | 32 | Meter (Nov 12) | `GET /v1/usage?from=&to=` (UTC days, `to` inclusive, default last 30 days, at most 90) returns `totals`, `days`, `instances` and `by_model` with `awake_minutes`, `sleeping_minutes`, `turns`, `input_tokens`, `output_tokens`; Agent37's shape without money. Awake = provisioning, running, starting, stopping; sleeping (disk only) = sleeping, waking, stopped. Minutes come from recorded state changes (`instance_events`), tokens from each finished turn (`turn_usage`), both in SQLite and kept after deletion. `GET /v1/instances/{id}/events` lists the state changes. No prices yet: cost fields come with prices and the wallet. The wallet create gate (402 `insufficient_balance`) moves to Phase 2 with the wallet. |
+| 33 | Pi adapter (Nov 12) | Pi through its CLI JSON mode (`pi --mode json`, one turn per exec, stdin closed), not the SDK: the same events with no glue code in the sandbox. Our own saved template `agent-sandbox-pi:<version>-r<n>` with a pinned Pi (`npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.5.2`), not Docker's `pi-kit`. Models through the Vercel AI Gateway (`--provider vercel-ai-gateway`), key swapped by the sbx proxy. We choose the Pi session id (`--session-id`). Input tokens = input + cacheRead + cacheWrite, as fx reports them. Next: bring-your-own provider keys (OpenRouter, OpenAI, ...) for every harness (decision 17). Later: subscription sign-in (ChatGPT/Codex OAuth), after a terms check; its token would live inside the sandbox. |
 
 ---
 
@@ -292,13 +293,27 @@ Droplet `s-4vcpu-8gb` in `blr1`. The unchanged code, `npm run smoke`, the fx tem
 
 Mapping from the relay: text-delta -> `response.output_text.delta`; reasoning-delta -> `response.reasoning.delta`; tool-input-start/delta -> `response.tool_call.generating`; tool-call -> `response.tool_call.started`; tool-result in the next request -> `response.tool_call.completed` or `.failed`. `response.created`, `response.completed` and `response.failed` come from the adapter (turn start, fx exit and `--json` result).
 
+### Pi spike (Pi 1.5.2, sbx v0.50.1, Nov 12, 2026)
+
+Pi is now `@earendil-works/pi-coding-agent` (the `@mariozechner/pi-coding-agent` name is deprecated). Tested in a `shell` sandbox through the sbx proxy with a placeholder `AI_GATEWAY_API_KEY`.
+
+| Test | Result |
+|---|---|
+| Install | `npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.5.2` as root: 20 s. Needs Node >= 22.19; the sandbox has 22.22.1. |
+| Model | `deepseek/deepseek-v4.1-flash` is in Pi's built-in `vercel-ai-gateway` list; no `models.json` needed. |
+| Key | Pi sends through `HTTPS_PROXY`, so the sbx proxy swaps the placeholder: no relay (unlike fx). |
+| One turn | `pi --mode json --provider vercel-ai-gateway --model M --session-id S --no-approve PROMPT`: 5 s, `write` then `bash` tools, JSON lines: `session` header, `message_update` (`text_delta`, `thinking_delta`, `toolcall_start {id, toolName}`), `tool_execution_start {toolName, args}`, `tool_execution_end {isError, durationMs, result}`, `message_end` with `usage {input, output, cacheRead, cacheWrite}` per assistant message, then `agent_settled`. Fixture: `test/fixtures/pi-1.5.2-hello-turn.jsonl`. |
+| Sessions | `--session-id S` creates the session on first use and continues it after; the next turn remembered `hello.py`. Stored in `~/.pi/agent/sessions/`. |
+| stdin | With stdin left open Pi waits for it and the turn never ends. Run it with stdin closed (`</dev/null`). |
+| Failures | A failed turn (a 401 from the gateway) still exits 0: the error is only in the last assistant `message_end` (`stopReason: "error"`, `errorMessage`). |
+
 ### Still open (answer by running code)
 
 | # | Question | How to answer |
 |---|---|---|
 | 1 | Does a stopped local sandbox keep the agent's session files and installed packages? | **Answered Nov 12, 2026, sbx v0.50.1: yes.** A file installed as root in `/usr/local/bin` and fx's session files under `~/.fx` (10 files) survive sleep (`sbx stop` then auto-start), and the next fx turn with `--resume` remembers the earlier conversation (acceptance step 8). |
 | 2 | How long do `template save` and create-from-template take locally? Is fork fast enough to be useful? | Time it. |
-| 3 | Can Pi and eve run as kits? | Build a minimal kit for each. |
+| 3 | Can Pi and eve run as kits? | Pi: Docker publishes `docker.io/sbx/pi-kit`; we use our own saved template instead (pinned Pi version), like fx. eve: still open. |
 | 4 | Do Docker's terms allow running local `sbx` as a hosted multi-tenant service? | **Answered Nov 12, 2026: not without written permission from Docker** (read of the published text, not legal advice). `sbx` is proprietary and "subject to the Docker Subscription Service Agreement" (package `copyright` file; `sbx login` says logging in accepts it). The DSSA (Aug 26, 2026) licenses use "for Customer's internal business purposes" (2.1) and forbids to "lease, rent, loan, or otherwise transfer the Services to any third party" and to operate "products or services intended to be offered to third parties in competition with the Services" (3.3); Docker sells Cloud Sandboxes and a Sandboxes API. Personal accounts are non-commercial (3.1(a)). The docs FAQ calls local `sbx` "free to use, including for commercial and professional work", but says nothing about hosting for others. Outcome: decision 26. Sources: https://www.docker.com/legal/docker-subscription-service-agreement/ , https://docs.docker.com/ai/sandboxes/faq/ , https://github.com/docker/sbx-releases (LICENSE). |
 | 5 | Do Hetzner cloud VMs expose KVM for local-mode `sbx` on Linux? (DigitalOcean: yes, see above.) | Smallest VM, `ls /dev/kvm`, `sbx diagnose`. Fallback: bare metal. |
 

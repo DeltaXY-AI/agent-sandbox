@@ -2,6 +2,7 @@
 // templates/fx/fx-turn.mjs, which wraps `fx ask --json` and reports the model's live
 // stream and tool results as JSON lines (SPEC section 8, weekend 2 spike).
 import type { TurnEvent } from "../events/types.ts";
+import { startedData } from "./tool-args.ts";
 import type { Exec, HarnessAdapter, TurnInput, TurnResult } from "./types.ts";
 
 /** Fields of `fx ask --json` we use (fx 0.0.16). */
@@ -25,7 +26,6 @@ type TurnLine =
 const TURN_SCRIPT = "/opt/agent-sandbox/fx-turn.mjs";
 const WORKDIR = "/home/agent";
 const TURN_TIMEOUT_MS = 15 * 60_000;
-const MAX_ARG_CHARS = 200;
 
 export function buildFxArgs(input: TurnInput): string[] {
   const args = ["env", "NODE_USE_ENV_PROXY=1", "node", TURN_SCRIPT];
@@ -80,34 +80,6 @@ export function parseFxResult(stdout: string, stderr: string, exitCode: number):
     status: "completed",
     outputText: (parsed.final_output || parsed.output || "").trim(),
   };
-}
-
-/** Tool input arrives as an object or a JSON string. Long strings are clipped. */
-function toolArguments(input: unknown): Record<string, unknown> | undefined {
-  let value = input;
-  if (typeof value === "string") {
-    try {
-      value = JSON.parse(value);
-    } catch {
-      return undefined;
-    }
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(value)) {
-    out[k] =
-      typeof v === "string" && v.length > MAX_ARG_CHARS ? `${v.slice(0, MAX_ARG_CHARS)}...` : v;
-  }
-  return out;
-}
-
-/** One-line summary of a tool call for `label`: the command, path or query it acts on. */
-function toolLabel(args: Record<string, unknown> | undefined): string | undefined {
-  for (const key of ["command", "path", "pattern", "query", "url"]) {
-    const v = args?.[key];
-    if (typeof v === "string" && v) return v.split("\n")[0]?.slice(0, 120);
-  }
-  return undefined;
 }
 
 /**
@@ -190,13 +162,7 @@ export class FxTurnParser {
     } else if (p.type === "tool-input-start" && typeof p.toolName === "string") {
       this.onEvent({ event: "response.tool_call.generating", data: { tool: p.toolName } });
     } else if (p.type === "tool-call" && typeof p.toolName === "string") {
-      const args = toolArguments(p.input);
-      const data: { tool: string; label?: string; arguments?: Record<string, unknown> } = {
-        tool: p.toolName,
-      };
-      const label = toolLabel(args);
-      if (label) data.label = label;
-      if (args) data.arguments = args;
+      const data = startedData(p.toolName, p.input);
       if (typeof p.toolCallId === "string") {
         this.open.set(p.toolCallId, { tool: p.toolName, at: line.at });
       }
