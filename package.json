@@ -16,7 +16,8 @@
     "deploy:do": "node --env-file=.env scripts/deploy-do.ts",
     "destroy:do": "node scripts/destroy-do.ts",
     "test:remote": "node --env-file=.env scripts/test-remote.ts",
-    "acceptance": "node --env-file=.env test/acceptance/checkpoint.ts"
+    "acceptance": "node --env-file=.env test/acceptance/checkpoint.ts",
+    "demo:workspaces": "node --env-file=.env scripts/demo-workspaces.ts"
   },
   "repository": {
     "type": "git",

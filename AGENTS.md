@@ -43,6 +43,7 @@ Node 24 runs the `.ts` files directly; there is no build step. Secrets go in `.e
 | `npm run acceptance` | TESTING.md steps 1-6, 8 and 9 against a running server: create, streamed turn, disconnect and reattach, files API, exec, public ports, workspaces and isolation, sleep and wake. Step 9 needs `AGENT_SANDBOX_ADMIN_KEY`. `TEMPLATE` (default fx), `PORT`. Costs a few model tokens. |
 | `node --env-file=.env scripts/demo-sandbox-api.ts` | Sandbox API demo (server must be running). |
 | `node --env-file=.env scripts/demo-agent.ts` | Agent demo on fx: first message, follow-up, hello.py (server must be running; costs a few model tokens). |
+| `npm run demo:workspaces` | Keys and workspaces as a six-act story: admin creates two workspaces, isolation by key and by network, key revocation, what the database keeps (server must be running; `-- --pause` waits between acts; no model tokens). |
 | `npm run deploy:do` | Immutable deploy to DigitalOcean: new droplet from `deploy/cloud-init.yaml`, push secrets over SSH, run checks, build fx, run `test-remote`, move the reserved IP, delete old droplets. On failure the new droplet is deleted. Needs a clean git tree and `DOCKER_USERNAME`, `DOCKER_PAT` in `.env`. |
 | `npm run test:remote` | Test a deployed server through an SSH tunnel (set `REMOTE_HOST`; `-- --skip-agent` skips model tokens). |
 | `npm run destroy:do` | List droplets tagged `agent-sandbox` and their reserved IP; `-- --yes` deletes them. |
