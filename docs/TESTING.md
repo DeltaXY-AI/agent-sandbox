@@ -29,4 +29,4 @@ Run steps 1-10 on each template. Mark each cell when it passes.
 
 Steps 1-5 pass on at least one template. If not, decide: continue, switch to Docker + gVisor, or stop.
 
-**Passed on fx, Nov 12, 2026** (SPEC decision 24): `npm run acceptance`, 18 of 18 checks, 51 s, local Windows host, sbx v0.50.1, fx 0.0.16.
+**Passed on fx, Nov 12, 2026** (SPEC decision 24): `npm run acceptance`, 18 of 18 checks, sbx v0.50.1, fx 0.0.16. Local Windows host: 51 s. DigitalOcean droplet (Ubuntu 24.04, s-4vcpu-8gb, blr1, deployed with `npm run deploy:do`, run through an SSH tunnel): 25 s.
