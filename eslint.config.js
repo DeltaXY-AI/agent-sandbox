@@ -8,6 +8,8 @@ const nodeGlobals = {
   Buffer: "readonly",
   URL: "readonly",
   setTimeout: "readonly",
+  AbortSignal: "readonly",
+  TextDecoder: "readonly",
 };
 
 export default tseslint.config(

@@ -1,0 +1,13 @@
+{
+  "name": "agent-sandbox-eve-agent",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "ai": "^7.0.137",
+    "eve": "1.0.0-rc.10",
+    "zod": "^4.0.0"
+  }
+}

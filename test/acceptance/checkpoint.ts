@@ -377,7 +377,7 @@ try {
   // session files survive sleep?
   console.log("\n== step 8: sleep and wake");
   const STATE =
-    "ls /usr/local/bin/acceptance-marker; find ~/.fx ~/.pi -type f 2>/dev/null | wc -l | tr -d ' '";
+    "ls /usr/local/bin/acceptance-marker; find ~/.fx ~/.pi ~/eve-agent/.eve/.workflow-data -type f 2>/dev/null | wc -l | tr -d ' '";
   await api("POST", `/v1/instances/${id}/exec`, {
     command: "echo installed > /usr/local/bin/acceptance-marker",
     user: "root",

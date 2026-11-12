@@ -15,7 +15,7 @@ import {
   stopSandbox,
   type SbxSandbox,
 } from "../lib/sbx.ts";
-import { FX_TEMPLATE_TAG, PI_TEMPLATE_TAG } from "../templates.ts";
+import { EVE_TEMPLATE_TAG, FX_TEMPLATE_TAG, PI_TEMPLATE_TAG } from "../templates.ts";
 import type { ExecRequest, ExecResult, HostProvider, HostSandbox, SandboxSpec } from "./types.ts";
 
 /** How a sandbox could reach the host's loopback through the sbx proxy. */
@@ -26,6 +26,7 @@ const TEMPLATES: Record<string, { agent: string; image?: string }> = {
   base: { agent: "shell" },
   fx: { agent: "shell", image: FX_TEMPLATE_TAG },
   pi: { agent: "shell", image: PI_TEMPLATE_TAG },
+  eve: { agent: "shell", image: EVE_TEMPLATE_TAG },
 };
 
 function toHostSandbox(s: SbxSandbox): HostSandbox {

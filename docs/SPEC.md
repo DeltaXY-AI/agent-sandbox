@@ -44,6 +44,7 @@
 | 31 | Sandbox network isolation (Nov 12) | Every sandbox is denied `host.docker.internal`, `localhost` and `127.0.0.0/8` (per-sandbox `sbx policy deny network`), so it cannot reach other sandboxes' published ports or the control plane. Creation fails if the rules cannot be set. |
 | 32 | Meter (Nov 12) | `GET /v1/usage?from=&to=` (UTC days, `to` inclusive, default last 30 days, at most 90) returns `totals`, `days`, `instances` and `by_model` with `awake_minutes`, `sleeping_minutes`, `turns`, `input_tokens`, `output_tokens`; Agent37's shape without money. Awake = provisioning, running, starting, stopping; sleeping (disk only) = sleeping, waking, stopped. Minutes come from recorded state changes (`instance_events`), tokens from each finished turn (`turn_usage`), both in SQLite and kept after deletion. `GET /v1/instances/{id}/events` lists the state changes. No prices yet: cost fields come with prices and the wallet. The wallet create gate (402 `insufficient_balance`) moves to Phase 2 with the wallet. |
 | 33 | Pi adapter (Nov 12) | Pi through its CLI JSON mode (`pi --mode json`, one turn per exec, stdin closed), not the SDK: the same events with no glue code in the sandbox. Our own saved template `agent-sandbox-pi:<version>-r<n>` with a pinned Pi (`npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.5.2`), not Docker's `pi-kit`. Models through the Vercel AI Gateway (`--provider vercel-ai-gateway`), key swapped by the sbx proxy. We choose the Pi session id (`--session-id`). Input tokens = input + cacheRead + cacheWrite, as fx reports them. Next: bring-your-own provider keys (OpenRouter, OpenAI, ...) for every harness (decision 17). Later: subscription sign-in (ChatGPT/Codex OAuth), after a terms check; its token would live inside the sandbox. |
+| 34 | eve adapter (Nov 12) | The `eve` template ships Node 24, a default coding-agent eve project in `/home/agent/eve-agent` (built at template time) and `templates/eve/eve-turn.mjs`, which starts `eve start` when needed and relays the session stream for one turn. eve assigns the session id. The project fixes the model (`deepseek/deepseek-v4.1-flash` in `agent/agent.ts`); a per-request `model` is not applied. `limits.sessionUsage` is off, so no turn pauses for a budget prompt; a paused turn fails instead of hanging. eve is pinned exactly (`1.0.0-rc.10`); an upgrade strands sessions, so it is a new template revision. Next: the user sends their own eve project (needs file writes or a create-time upload). |
 
 ---
 
@@ -307,13 +308,28 @@ Pi is now `@earendil-works/pi-coding-agent` (the `@mariozechner/pi-coding-agent`
 | stdin | With stdin left open Pi waits for it and the turn never ends. Run it with stdin closed (`</dev/null`). |
 | Failures | A failed turn (a 401 from the gateway) still exits 0: the error is only in the last assistant `message_end` (`stopReason: "error"`, `errorMessage`). |
 
+### eve spike (eve 1.0.0-rc.10, sbx v0.50.1, Nov 12, 2026)
+
+eve (npm `eve`, Vercel) is a framework: an agent is a project folder (`package.json` + `agent/`), built with `eve build` and served by `eve start` as an HTTP server. On Vercel the build output becomes Vercel services (web runtime, Workflow, Schedules, Sandbox); here the sandbox VM plays all four.
+
+| Test | Result |
+|---|---|
+| Node | eve needs Node >= 24; the sandbox image has 22.22.1. Official Node 24.16.0 tarball into `/opt/node24`: 3 s. |
+| Build | `npm install` + `eve build` of a minimal project: 36 s. `eve start` answers `/eve/v1/health` within 4 s. |
+| Route auth | `eve start` rejects every request unless `agent/channels/eve.ts` sets auth; the template uses `none()` (it listens only on the VM's loopback). |
+| eve's own sandbox | Built-in providers need Docker or Vercel (just-bash runs no real processes). The template adds a custom `local` provider (`agent/lib/local-sandbox.ts`) that runs `bash -lc` on the VM itself, workspace `/home/agent`. |
+| Key | eve's model calls go through `HTTPS_PROXY` (`NODE_USE_ENV_PROXY=1` is already set in sbx sandboxes): the proxy swaps the placeholder, no relay. |
+| One turn | `POST /eve/v1/session {message}`, then `GET /eve/v1/session/:id/stream` (NDJSON, stream version 27): `content.delta` (text/reasoning, `kind` only on a part's first delta), `call.input`, `call.requested` (name, label, input), `call.started`/`call.settled` (duration from line timestamps), `usage.recorded` per model run (`inputTokens` already include cached tokens), `turn.settled`. 7 s for hello.py. Fixture: `test/fixtures/eve-1.0.0-rc.10-hello-turn.jsonl`. |
+| Follow-up turns | Read the stream from `x-eve-stream-tail-index` + 1 (the header is the last line's position), or a turn sees the previous turn's `turn.settled`. |
+| VM stop | Processes die, files stay: the shim restarts `eve start`, and the same eve session continues with its history (8 s including the VM start). |
+
 ### Still open (answer by running code)
 
 | # | Question | How to answer |
 |---|---|---|
 | 1 | Does a stopped local sandbox keep the agent's session files and installed packages? | **Answered Nov 12, 2026, sbx v0.50.1: yes.** A file installed as root in `/usr/local/bin` and fx's session files under `~/.fx` (10 files) survive sleep (`sbx stop` then auto-start), and the next fx turn with `--resume` remembers the earlier conversation (acceptance step 8). |
 | 2 | How long do `template save` and create-from-template take locally? Is fork fast enough to be useful? | Time it. |
-| 3 | Can Pi and eve run as kits? | Pi: Docker publishes `docker.io/sbx/pi-kit`; we use our own saved template instead (pinned Pi version), like fx. eve: still open. |
+| 3 | Can Pi and eve run as kits? | **Answered Nov 12, 2026:** both run as our own saved templates (pinned versions), like fx. Docker publishes a Pi kit; eve has none. Kits are not needed. |
 | 4 | Do Docker's terms allow running local `sbx` as a hosted multi-tenant service? | **Answered Nov 12, 2026: not without written permission from Docker** (read of the published text, not legal advice). `sbx` is proprietary and "subject to the Docker Subscription Service Agreement" (package `copyright` file; `sbx login` says logging in accepts it). The DSSA (Aug 26, 2026) licenses use "for Customer's internal business purposes" (2.1) and forbids to "lease, rent, loan, or otherwise transfer the Services to any third party" and to operate "products or services intended to be offered to third parties in competition with the Services" (3.3); Docker sells Cloud Sandboxes and a Sandboxes API. Personal accounts are non-commercial (3.1(a)). The docs FAQ calls local `sbx` "free to use, including for commercial and professional work", but says nothing about hosting for others. Outcome: decision 26. Sources: https://www.docker.com/legal/docker-subscription-service-agreement/ , https://docs.docker.com/ai/sandboxes/faq/ , https://github.com/docker/sbx-releases (LICENSE). |
 | 5 | Do Hetzner cloud VMs expose KVM for local-mode `sbx` on Linux? (DigitalOcean: yes, see above.) | Smallest VM, `ls /dev/kvm`, `sbx diagnose`. Fallback: bare metal. |
 
