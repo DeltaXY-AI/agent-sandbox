@@ -42,6 +42,7 @@
 | 29 | Ports (Nov 12) | Agent37's model. Preview URL `{id}-{port}.<domain>` for any port, no registration, needs a credential: the API key (`Authorization: Bearer`), that instance's `X-Agent-Key`, or a signed URL. `public_ports` give permanent unauthenticated URLs (`{prefix}-{id}` or a 20-character slug) for webhooks. The bare `{id}.<domain>` stays the Agent API, so acceptance step 6 opens the preview URL. WebSockets come after step 6. |
 | 30 | Workspaces and keys (Nov 12) | Workspaces own instances; `sk_live_` API keys belong to a workspace and act only inside it (another workspace's instance is 404, as on Agent37). Another system (sign-up, billing) creates workspaces and keys through the admin API, guarded by `AGENT_SANDBOX_ADMIN_KEY`. `AGENT_SANDBOX_API_KEY` is the key of a built-in default workspace. Durable state moves to SQLite (Node's built-in `node:sqlite`, `DATABASE_PATH`, default `data/agent-sandbox.db`): workspaces, key hashes (the plain key is shown once), instance records (owner, template, agent key, settings) and server secrets. Sessions and replay buffers stay in memory. This replaces decision 22's in-memory state for these. |
 | 31 | Sandbox network isolation (Nov 12) | Every sandbox is denied `host.docker.internal`, `localhost` and `127.0.0.0/8` (per-sandbox `sbx policy deny network`), so it cannot reach other sandboxes' published ports or the control plane. Creation fails if the rules cannot be set. |
+| 32 | Meter (Nov 12) | `GET /v1/usage?from=&to=` (UTC days, `to` inclusive, default last 30 days, at most 90) returns `totals`, `days`, `instances` and `by_model` with `awake_minutes`, `sleeping_minutes`, `turns`, `input_tokens`, `output_tokens`; Agent37's shape without money. Awake = provisioning, running, starting, stopping; sleeping (disk only) = sleeping, waking, stopped. Minutes come from recorded state changes (`instance_events`), tokens from each finished turn (`turn_usage`), both in SQLite and kept after deletion. `GET /v1/instances/{id}/events` lists the state changes. No prices yet: cost fields come with prices and the wallet. The wallet create gate (402 `insufficient_balance`) moves to Phase 2 with the wallet. |
 
 ---
 
@@ -133,7 +134,8 @@ Adding a cloud means adding one HostProvider. Adding a harness means adding one 
 | POST | `/v1/instances/{id}/exec` | 1 |
 | GET | `/v1/instances/{id}/logs` | 1 |
 | DELETE | `/v1/instances/{id}` | 1 |
-| GET | `/v1/usage` (minutes, tokens, cost per instance) | 1 |
+| GET | `/v1/usage` (minutes, tokens per instance, day and model; cost with the wallet, Phase 2) | 1 |
+| GET | `/v1/instances/{id}/events` (state changes behind the minutes) | 1 |
 | POST/GET | `/v1/instances/{id}/backups` | 2 |
 | POST/GET | `/v1/instances/{id}/crons` | 2 |
 | GET | `/v1/instances/{id}/metrics` | 2 |

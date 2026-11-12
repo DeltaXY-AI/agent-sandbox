@@ -7,6 +7,7 @@ import { LocalWindowsHost } from "./hosts/local-windows.ts";
 import type { SandboxSecret } from "./hosts/types.ts";
 import { InstanceService } from "./instances/service.ts";
 import { Store } from "./store/store.ts";
+import { Meter } from "./meter/meter.ts";
 import { TEMPLATES } from "./templates.ts";
 
 const config = loadConfig();
@@ -14,11 +15,13 @@ const host = new LocalWindowsHost();
 const store = new Store(config.databasePath);
 // The default workspace owns AGENT_SANDBOX_API_KEY, so existing clients keep working.
 const defaultWorkspace = store.bootstrapDefault(config.apiKey);
+const meter = new Meter(store);
 /** Every sandbox URL is a subdomain of localhost for now: Agent API, preview URLs, public ports. */
 const hostUrl = (label: string) => `http://${label}.localhost:${config.port}`;
 const instances = new InstanceService(host, config.sandboxPrefix, hostUrl, {
   records: store,
   defaultWorkspaceId: defaultWorkspace.id,
+  onStateChange: (id, workspaceId, state) => meter.recordState(id, workspaceId, state),
 });
 
 /** The secrets a template's harness needs, with values from this process's env. */
@@ -41,6 +44,7 @@ instances.startIdleTimer();
 const app = buildApp({
   store,
   adminKey: config.adminKey,
+  meter,
   instances,
   templates: LocalWindowsHost.templates(),
   harnesses: HARNESSES,

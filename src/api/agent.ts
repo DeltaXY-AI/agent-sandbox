@@ -5,6 +5,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import { z } from "zod";
 import { ResponseStore } from "../events/buffer.ts";
+import type { Meter } from "../meter/meter.ts";
 import { parseLastEventId, sseResponse } from "../events/sse.ts";
 import type { HarnessAdapter, TurnResult } from "../harnesses/types.ts";
 import { ApiError, type InstanceService } from "../instances/service.ts";
@@ -43,6 +44,8 @@ export interface AgentDeps {
   instances: InstanceService;
   harnesses: Record<string, HarnessAdapter>;
   defaultModel: string;
+  /** Records each finished turn's tokens. */
+  meter: Meter;
 }
 
 type Env = { Bindings: { instanceId: string } };
@@ -152,6 +155,8 @@ export function agentApp(deps: AgentDeps) {
     const responseId = newId("resp");
     const model = body.model ?? deps.defaultModel;
     const createdAt = now();
+    // Captured now: the instance may be deleted before the turn ends.
+    const workspaceId = deps.instances.get(instanceId).workspace_id;
     session.active_response_id = responseId;
     const buffer = responsesOf(instanceId).create(responseId, session.id);
     buffer.push({ event: "response.created", data: { id: responseId, session_id: session.id } });
@@ -191,6 +196,14 @@ export function agentApp(deps: AgentDeps) {
         session.updated_at = now();
       }
     })().then((result) => {
+      deps.meter.recordTurn({
+        instance_id: instanceId,
+        workspace_id: workspaceId,
+        response_id: responseId,
+        model,
+        input_tokens: result.usage.inputTokens,
+        output_tokens: result.usage.outputTokens,
+      });
       const usage = {
         input_tokens: result.usage.inputTokens,
         output_tokens: result.usage.outputTokens,

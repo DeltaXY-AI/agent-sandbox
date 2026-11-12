@@ -77,6 +77,8 @@ export interface InstanceServiceOptions {
   };
   /** Owner for sandboxes found on the host with no record. */
   defaultWorkspaceId?: string;
+  /** Called on every state change (the meter records it). "deleted" when removed. */
+  onStateChange?: (instanceId: string, workspaceId: string, state: string) => void;
 }
 
 export class InstanceService {
@@ -92,6 +94,7 @@ export class InstanceService {
   private readonly wakeTimeoutMs: number;
   private readonly records: InstanceServiceOptions["records"];
   private readonly defaultWorkspaceId: string;
+  private readonly onStateChange: NonNullable<InstanceServiceOptions["onStateChange"]>;
 
   constructor(
     host: HostProvider,
@@ -106,6 +109,7 @@ export class InstanceService {
     this.wakeTimeoutMs = options.wakeTimeoutMs ?? 3 * 60_000;
     this.records = options.records;
     this.defaultWorkspaceId = options.defaultWorkspaceId ?? "ws_default";
+    this.onStateChange = options.onStateChange ?? (() => undefined);
   }
 
   private iso(): string {
@@ -134,6 +138,7 @@ export class InstanceService {
           last_active_at: this.iso(),
           url: this.urlFor(s.name),
         });
+        this.reportState(s.name);
         adopted++;
         continue;
       }
@@ -149,6 +154,7 @@ export class InstanceService {
         metadata: {},
         url: this.urlFor(s.name),
       });
+      this.reportState(s.name);
       adopted++;
     }
     return adopted;
@@ -170,6 +176,7 @@ export class InstanceService {
       agent_key: `ak_${randomBytes(24).toString("hex")}`,
     };
     this.instances.set(id, instance);
+    this.reportState(id);
     this.records?.saveInstance({
       id,
       workspace_id: instance.workspace_id,
@@ -410,6 +417,7 @@ export class InstanceService {
         throw err;
       }
     }
+    this.onStateChange(id, instance.workspace_id, "deleted");
     this.instances.delete(id);
     this.inFlight.delete(id);
     this.records?.deleteInstance(id);
@@ -437,10 +445,16 @@ export class InstanceService {
     return instance;
   }
 
+  private reportState(id: string) {
+    const instance = this.instances.get(id);
+    if (instance) this.onStateChange(id, instance.workspace_id, instance.status);
+  }
+
   private setStatus(id: string, status: InstanceStatus, error?: string) {
     const instance = this.instances.get(id);
     if (!instance) return;
     instance.status = status;
+    this.onStateChange(id, instance.workspace_id, status);
     instance.updated_at = this.iso();
     if (error) instance.error = error;
     else delete instance.error;

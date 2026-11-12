@@ -10,6 +10,7 @@ import type {
 } from "../src/hosts/types.ts";
 import { InstanceService, type InstanceServiceOptions } from "../src/instances/service.ts";
 import { Store } from "../src/store/store.ts";
+import { Meter } from "../src/meter/meter.ts";
 
 class FakeHost implements HostProvider {
   readonly name = "fake";
@@ -87,12 +88,15 @@ function setup(options: InstanceServiceOptions = {}) {
   const host = new FakeHost();
   const store = new Store(":memory:");
   store.bootstrapDefault("k");
+  const meter = new Meter(store, options.now);
   const instances = new InstanceService(host, "sb-", (id) => `http://${id}.localhost`, {
     records: store,
+    onStateChange: (id, ws, state) => meter.recordState(id, ws, state),
     ...options,
   });
   const app = buildApp({
     store,
+    meter,
     adminKey: "admin",
     instances,
     templates: ["base", "fx"],
@@ -567,6 +571,73 @@ describe("Workspaces and keys", () => {
       template: "fx",
       agent_key: inst.agent_key,
     });
+  });
+});
+
+describe("Usage", () => {
+  it("meters awake and sleeping minutes and turn tokens, per workspace (step 10)", async () => {
+    let t = Date.parse("2026-11-12T10:00:00Z");
+    const ctx = setup({ now: () => t });
+    const inst = await createRunning(ctx.app);
+    await ctx.app.fetch(agentReq(inst.id, inst.agent_key, "/v1/responses", { input: "a" }));
+    await ctx.app.fetch(agentReq(inst.id, inst.agent_key, "/v1/responses", { input: "b" }));
+    t += 10 * 60_000;
+    await ctx.instances.sleep(inst.id);
+    t += 5 * 60_000;
+    const auth = { headers: { authorization: "Bearer k" } };
+
+    const usage = (await (
+      await ctx.app.request("/v1/usage?from=2026-11-12&to=2026-11-12", auth)
+    ).json()) as {
+      totals: Record<string, number>;
+      instances: { id: string; awake_minutes: number; sleeping_minutes: number }[];
+      days: unknown[];
+      by_model: { model: string; turns: number }[];
+    };
+    expect(usage.totals).toEqual({
+      awake_minutes: 10,
+      sleeping_minutes: 5,
+      turns: 2,
+      input_tokens: 20, // the fake harness reports 10 + 10
+      output_tokens: 4,
+    });
+    expect(usage.instances).toEqual([expect.objectContaining({ id: inst.id, awake_minutes: 10 })]);
+    expect(usage.days).toHaveLength(1);
+    expect(usage.by_model).toEqual([expect.objectContaining({ model: "default-model", turns: 2 })]);
+
+    const events = (await (
+      await ctx.app.request(`/v1/instances/${inst.id}/events?from=2026-11-12&to=2026-11-12`, auth)
+    ).json()) as { events: { type: string }[] };
+    expect(events.events.map((e) => e.type)).toEqual([
+      "instance.provisioning",
+      "instance.running",
+      "instance.stopping",
+      "instance.sleeping",
+    ]);
+
+    // Another workspace sees none of it.
+    const b = (await (
+      await ctx.app.request("/v1/admin/workspaces", {
+        method: "POST",
+        headers: { authorization: "Bearer admin", "content-type": "application/json" },
+        body: JSON.stringify({ name: "b" }),
+      })
+    ).json()) as { api_key: { key: string } };
+    const other = (await (
+      await ctx.app.request("/v1/usage?from=2026-11-12&to=2026-11-12", {
+        headers: { authorization: `Bearer ${b.api_key.key}` },
+      })
+    ).json()) as { totals: Record<string, number>; instances: unknown[] };
+    expect(other.instances).toEqual([]);
+    expect(other.totals.turns).toBe(0);
+  });
+
+  it("rejects a bad window with 400", async () => {
+    const { app } = setup();
+    const res = await app.request("/v1/usage?from=2026-01-01&to=2026-11-12", {
+      headers: { authorization: "Bearer k" },
+    });
+    expect(res.status).toBe(400);
   });
 });
 

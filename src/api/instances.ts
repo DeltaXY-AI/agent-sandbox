@@ -17,6 +17,8 @@ import {
   type PublicPorts,
   type UrlSigner,
 } from "../router/ports.ts";
+import type { Meter } from "../meter/meter.ts";
+import { usageWindow } from "./usage.ts";
 
 const port = z.number().int().min(1).max(65_535);
 const publicPortBody = z.object({
@@ -36,6 +38,7 @@ export interface PortsDeps {
   publicPorts: PublicPorts;
   signer: UrlSigner;
   hostUrl: (label: string) => string;
+  meter: Meter;
 }
 
 const createBody = z.object({
@@ -165,6 +168,13 @@ export function instancesRoutes(
     await service.delete(c.req.param("id"));
     ports.publicPorts.removeInstance(c.req.param("id"));
     return c.body(null, 204);
+  });
+
+  // State changes of one instance (Agent37's events endpoint): the basis of its minutes.
+  app.get("/:id/events", (c) => {
+    const { from, to, fromMs, toMs } = usageWindow(c.req.query("from"), c.req.query("to"));
+    const id = c.req.param("id");
+    return c.json({ from, to, events: ports.meter.events(c.get("workspaceId"), id, fromMs, toMs) });
   });
 
   // Public ports: permanent unauthenticated URLs (Agent37 shapes).

@@ -17,12 +17,16 @@ import { parseHost } from "./router/hosts.ts";
 import { PublicPorts, UrlSigner } from "./router/ports.ts";
 import { portsRouter } from "./router/ports-router.ts";
 import type { Store } from "./store/store.ts";
+import type { Meter } from "./meter/meter.ts";
+import { usageRoutes } from "./api/usage.ts";
 
 export interface AppDeps {
   /** Workspaces, API keys (hashes), settings. */
   store: Store;
   /** Guards /v1/admin. Absent: the admin API is off. */
   adminKey?: string;
+  /** Usage: state minutes and turn tokens. */
+  meter: Meter;
   instances: InstanceService;
   templates: string[];
   harnesses: Record<string, HarnessAdapter>;
@@ -132,12 +136,14 @@ export function buildApp(deps: AppDeps) {
     await next();
   });
 
+  app.route("/v1/usage", usageRoutes(deps.meter));
   app.route(
     "/v1/instances",
     instancesRoutes(deps.instances, deps.templates, deps.secretsForTemplate, {
       publicPorts,
       signer,
       hostUrl,
+      meter: deps.meter,
     }),
   );
 

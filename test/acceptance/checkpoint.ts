@@ -1,5 +1,5 @@
-// Acceptance: docs/TESTING.md steps 1-6, 8 and 9 on one template (weekend 2 checkpoint,
-// public ports, workspaces and isolation, sleep and wake), against a running server.
+// Acceptance: docs/TESTING.md steps 1-6 and 8-10 on one template (checkpoint, public ports,
+// sleep and wake, workspaces and isolation, usage), against a running server.
 // Run:  node --env-file=.env test/acceptance/checkpoint.ts            (template fx, port 3000)
 // Env:  TEMPLATE (default fx), PORT (default 3000), AGENT_SANDBOX_API_KEY, AGENT_SANDBOX_ADMIN_KEY
 // Costs a few model tokens. Prints PASS/FAIL per check; exit code 1 if any check fails.
@@ -413,6 +413,42 @@ try {
       Number(afterFx) >= Number(beforeFx) &&
       Number(beforeFx) > 0,
     `marker ${marker ? "kept" : "lost"}, fx files ${beforeFx} -> ${afterFx}`,
+  );
+
+  // Step 10: /v1/usage shows running minutes, sleeping minutes and tokens for the sandbox.
+  // The tokens must equal what the four turns above reported, so nothing is lost or doubled.
+  console.log("\n== step 10: usage");
+  const reported = [
+    frames.at(-1)?.data?.usage, // step 2 (streamed)
+    rest.frames.at(-1)?.data?.usage, // step 3 (streamed, reattached)
+    JSON.parse(serve.text || "{}").usage, // step 6
+    reply.usage, // step 8
+  ];
+  const sum = (k: "input_tokens" | "output_tokens") =>
+    reported.reduce((n, u) => n + (u?.[k] ?? 0), 0);
+  const today = new Date().toISOString().slice(0, 10);
+  const usage = await api("GET", `/v1/usage?from=${today}&to=${today}`);
+  const mine = usage.json?.instances?.find((i: { id: string }) => i.id === id);
+  check("GET /v1/usage -> 200 with this sandbox", usage.status === 200 && Boolean(mine));
+  check("running (awake) minutes > 0", mine?.awake_minutes > 0, `${mine?.awake_minutes} min`);
+  check(
+    "sleeping minutes > 0 (step 8 slept it)",
+    mine?.sleeping_minutes > 0,
+    `${mine?.sleeping_minutes} min`,
+  );
+  check(
+    "tokens equal the sum of the 4 turns' reported usage",
+    mine?.turns === 4 &&
+      mine?.input_tokens === sum("input_tokens") &&
+      mine?.output_tokens === sum("output_tokens"),
+    `turns ${mine?.turns}, in ${mine?.input_tokens}/${sum("input_tokens")}, out ${mine?.output_tokens}/${sum("output_tokens")}`,
+  );
+  const events = await api("GET", `/v1/instances/${id}/events?from=${today}&to=${today}`);
+  const types: string[] = (events.json?.events ?? []).map((e: { type: string }) => e.type);
+  check(
+    "GET /v1/instances/{id}/events shows it slept and woke",
+    types.includes("instance.sleeping") && types.includes("instance.waking"),
+    types.join(" > "),
   );
 } finally {
   const del = await api("DELETE", `/v1/instances/${id}`);

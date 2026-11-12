@@ -35,6 +35,24 @@ export interface InstanceRecord {
   created_at: string;
 }
 
+export interface InstanceEvent {
+  instance_id: string;
+  workspace_id: string;
+  /** The instance status entered (running, sleeping, ...), or "deleted". */
+  state: string;
+  at_ms: number;
+}
+
+export interface TurnUsage {
+  instance_id: string;
+  workspace_id: string;
+  response_id: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  at_ms: number;
+}
+
 export const DEFAULT_WORKSPACE_ID = "ws_default";
 
 const now = () => new Date().toISOString();
@@ -64,6 +82,19 @@ export class Store {
         template TEXT NOT NULL, agent_key TEXT NOT NULL, idle_timeout_seconds INTEGER NOT NULL,
         metadata TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY, value TEXT NOT NULL);
+      -- Meter: every instance state change, and every finished turn's tokens. Kept after
+      -- the instance is deleted, so usage history stays complete.
+      CREATE TABLE IF NOT EXISTS instance_events (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        instance_id TEXT NOT NULL, workspace_id TEXT NOT NULL, state TEXT NOT NULL,
+        at_ms INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS instance_events_ws ON instance_events (workspace_id, at_ms);
+      CREATE TABLE IF NOT EXISTS turn_usage (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        instance_id TEXT NOT NULL, workspace_id TEXT NOT NULL, response_id TEXT NOT NULL,
+        model TEXT NOT NULL, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
+        at_ms INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS turn_usage_ws ON turn_usage (workspace_id, at_ms);
     `);
   }
 
@@ -200,6 +231,73 @@ export class Store {
         idle_timeout_seconds: Number(row.idle_timeout_seconds),
         metadata: JSON.parse(String(row.metadata)) as Record<string, string>,
         created_at: String(row.created_at),
+      }));
+  }
+
+  // --- meter
+
+  addInstanceEvent(e: InstanceEvent): void {
+    this.db
+      .prepare(
+        "INSERT INTO instance_events (instance_id, workspace_id, state, at_ms) VALUES (?, ?, ?, ?)",
+      )
+      .run(e.instance_id, e.workspace_id, e.state, e.at_ms);
+  }
+
+  /** A workspace's instance events before `beforeMs`, oldest first (earlier ones set the state). */
+  instanceEvents(workspaceId: string, beforeMs: number, instanceId?: string): InstanceEvent[] {
+    const rows = instanceId
+      ? this.db
+          .prepare(
+            "SELECT * FROM instance_events WHERE workspace_id = ? AND instance_id = ? AND at_ms < ?" +
+              " ORDER BY at_ms, seq",
+          )
+          .all(workspaceId, instanceId, beforeMs)
+      : this.db
+          .prepare(
+            "SELECT * FROM instance_events WHERE workspace_id = ? AND at_ms < ? ORDER BY at_ms, seq",
+          )
+          .all(workspaceId, beforeMs);
+    return rows.map((r) => ({
+      instance_id: String(r.instance_id),
+      workspace_id: String(r.workspace_id),
+      state: String(r.state),
+      at_ms: Number(r.at_ms),
+    }));
+  }
+
+  addTurnUsage(u: TurnUsage): void {
+    this.db
+      .prepare(
+        "INSERT INTO turn_usage" +
+          " (instance_id, workspace_id, response_id, model, input_tokens, output_tokens, at_ms)" +
+          " VALUES (?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        u.instance_id,
+        u.workspace_id,
+        u.response_id,
+        u.model,
+        u.input_tokens,
+        u.output_tokens,
+        u.at_ms,
+      );
+  }
+
+  turnUsage(workspaceId: string, fromMs: number, toMs: number): TurnUsage[] {
+    return this.db
+      .prepare(
+        "SELECT * FROM turn_usage WHERE workspace_id = ? AND at_ms >= ? AND at_ms < ? ORDER BY at_ms",
+      )
+      .all(workspaceId, fromMs, toMs)
+      .map((r) => ({
+        instance_id: String(r.instance_id),
+        workspace_id: String(r.workspace_id),
+        response_id: String(r.response_id),
+        model: String(r.model),
+        input_tokens: Number(r.input_tokens),
+        output_tokens: Number(r.output_tokens),
+        at_ms: Number(r.at_ms),
       }));
   }
 
