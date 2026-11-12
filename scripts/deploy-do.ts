@@ -254,13 +254,20 @@ const reserved: {
 }[] = await doctl("compute", "reserved-ip", "list");
 let stableIp = reserved.find((r) => r.droplet?.tags?.includes(TAG))?.ip;
 if (stableIp) {
-  await ok("doctl", ["compute", "reserved-ip-action", "assign", stableIp, dropletId, "--wait"]);
-  console.log(`  ${stableIp} -> ${name}`);
+  await ok("doctl", ["compute", "reserved-ip-action", "assign", stableIp, dropletId]);
 } else {
   const [made] = await doctl("compute", "reserved-ip", "create", "--droplet-id", dropletId);
   stableIp = made.ip as string;
-  console.log(`  created reserved IP ${stableIp} -> ${name}`);
+  console.log(`  created reserved IP ${stableIp}`);
 }
+// doctl has no --wait for reserved IP actions; poll until it points at the new droplet.
+for (let i = 0; ; i++) {
+  const [state] = await doctl("compute", "reserved-ip", "get", stableIp);
+  if (String(state?.droplet?.id) === dropletId) break;
+  if (i >= 60) throw new Error(`reserved IP ${stableIp} not on ${name} after 2 minutes`);
+  await sleep(2000);
+}
+console.log(`  ${stableIp} -> ${name}`);
 await run("ssh-keygen", ["-R", stableIp]);
 
 step("retire old droplets");

@@ -37,14 +37,32 @@ if (!process.argv.includes("--yes")) {
   console.log("\nNothing deleted. Re-run with --yes to delete these.");
   process.exit(0);
 }
-for (const ip of ips) {
-  doctl("compute", "reserved-ip-action", "unassign", ip, "--wait");
-  spawnSync("doctl", ["compute", "reserved-ip", "delete", ip, "--force"], { windowsHide: true });
-  console.log(`deleted reserved IP ${ip}`);
+function deleteOk(...args: string[]) {
+  const r = spawnSync("doctl", [...args, "--force"], { encoding: "utf8", windowsHide: true });
+  if (r.status !== 0) throw new Error(`doctl ${args.join(" ")} failed: ${r.stderr}`);
 }
+
+// Deleting a droplet releases its reserved IP; doctl has no --wait for that, so poll.
 for (const d of droplets) {
-  spawnSync("doctl", ["compute", "droplet", "delete", String(d.id), "--force"], {
-    windowsHide: true,
-  });
+  deleteOk("compute", "droplet", "delete", String(d.id));
   console.log(`deleted droplet ${d.name}`);
+}
+for (const ip of ips) {
+  for (let i = 0; doctl("compute", "reserved-ip", "get", ip)[0]?.droplet; i++) {
+    if (i >= 60) throw new Error(`reserved IP ${ip} still assigned after 2 minutes`);
+    spawnSync(process.execPath, ["-e", "setTimeout(() => {}, 2000)"]);
+  }
+  deleteOk("compute", "reserved-ip", "delete", ip);
+  // DigitalOcean can accept the delete and still list the IP (seen Nov 12, 2026). Say so.
+  const listed = () =>
+    (doctl("compute", "reserved-ip", "list") as { ip: string }[]).some((r) => r.ip === ip);
+  for (let i = 0; i < 15 && listed(); i++) {
+    spawnSync(process.execPath, ["-e", "setTimeout(() => {}, 2000)"]);
+  }
+  if (listed()) {
+    console.log(`WARNING: reserved IP ${ip} is still listed. Retry later:`);
+    console.log(`  doctl compute reserved-ip delete ${ip} --force`);
+  } else {
+    console.log(`deleted reserved IP ${ip}`);
+  }
 }
