@@ -37,21 +37,17 @@ try {
     ],
     "root",
   );
-  await copyToSandbox(
-    name,
-    "templates/fx/gateway-relay.mjs",
-    "/opt/agent-sandbox/gateway-relay.mjs",
-  );
-  await copyToSandbox(name, "templates/fx/fx-turn.sh", "/opt/agent-sandbox/fx-turn.sh");
+  await copyToSandbox(name, "templates/fx/fx-turn.mjs", "/opt/agent-sandbox/fx-turn.mjs");
   await step(
     "permissions, CRLF guard",
     [
       "sh",
       "-c",
-      "sed -i 's/\\r$//' /opt/agent-sandbox/fx-turn.sh && chmod 755 /opt/agent-sandbox/*",
+      "sed -i 's/\\r$//' /opt/agent-sandbox/fx-turn.mjs && chmod 755 /opt/agent-sandbox/*",
     ],
     "root",
   );
+  await step("fx-turn.mjs parses", ["node", "--check", "/opt/agent-sandbox/fx-turn.mjs"]);
   const version = (await step("fx --version", ["fx", "--version"])).trim();
   if (version !== FX_VERSION) throw new Error(`expected fx ${FX_VERSION}, got ${version}`);
   await step("clean fx state", ["sh", "-c", "rm -rf ~/.fx/sessions ~/.fx/logs /tmp/*.log"]);

@@ -37,6 +37,8 @@ export const SBX_FAILED = 125;
 export interface RunOptions {
   timeoutMs?: number;
   stdin?: string;
+  /** Called with each stdout chunk as it arrives (sbx exec streams live). */
+  onStdout?: (chunk: string) => void;
 }
 
 /** Run `sbx <args>` and return output and exit code. Never throws on a non-zero exit. */
@@ -50,7 +52,10 @@ export function runSbx(args: string[], options: RunOptions = {}): Promise<SbxRes
     });
     let stdout = "";
     let stderr = "";
-    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      stdout += chunk;
+      options.onStdout?.(chunk);
+    });
     child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
     child.on("error", reject);
     child.on("close", (code, signal) => {

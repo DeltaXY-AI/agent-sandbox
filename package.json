@@ -15,7 +15,8 @@
     "smoke": "node scripts/sbx-smoke.ts",
     "deploy:do": "node --env-file=.env scripts/deploy-do.ts",
     "destroy:do": "node scripts/destroy-do.ts",
-    "test:remote": "node --env-file=.env scripts/test-remote.ts"
+    "test:remote": "node --env-file=.env scripts/test-remote.ts",
+    "acceptance": "node --env-file=.env test/acceptance/checkpoint.ts"
   },
   "repository": {
     "type": "git",

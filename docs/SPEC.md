@@ -145,6 +145,8 @@ Adding a cloud means adding one HostProvider. Adding a harness means adding one 
 
 Keepalive comment every 30 s. No `[DONE]` sentinel. Replay buffer per response; record kept 30 minutes.
 
+Payloads follow Agent37's streaming docs (`response.created {id, session_id}`, deltas `{text}`, tool events `{tool, ...}`, `response.completed {output_text, usage, context, reasoning_effort}`, `response.failed {error}`). Each frame also carries an SSE `id:` (1, 2, 3, ... per response). Reattach without a `Last-Event-ID` header replays everything (Agent37 behaviour); with it, only later events are sent, so a client resumes with no gap and no duplicate (TESTING.md step 3). Agent37 documents no resume mechanism; `id:` and `Last-Event-ID` are the SSE standard and add no events.
+
 ---
 
 ## 4. Lifecycle states
@@ -178,7 +180,7 @@ Any state -> `failed`. `deleting -> deleted`.
 | When | Target |
 |---|---|
 | Weekend 1 | `sbx` on Windows driven from Node: create, exec, delete. Sandbox API (`/v1/instances`, exec, stop, start) on the `base` template. fx template. `/v1/responses` non-streaming on fx. Demo: Agent37's "first agent message" and a hello.py turn. Repo public with README, AGENTS.md, this spec. |
-| **Weekend 2 - checkpoint** | **One template passes acceptance steps 1-5.** If not: decide to continue, switch to Docker + gVisor, or stop. |
+| **Weekend 2 - checkpoint** | **One template passes acceptance steps 1-5.** If not: decide to continue, switch to Docker + gVisor, or stop. **Passed on fx, Nov 12, 2026** (`npm run acceptance`). |
 | Weekend 3 | Pi and eve adapters. Fork, sleep and wake, public ports. Keys and meter. |
 | Weekend 4 | All three templates pass the full acceptance script. First cloud experiment (KVM check on Hetzner and DigitalOcean). |
 | Phase 2 | Remaining `sbx` harnesses, backups, crons, metrics, profiles, regions, custom images, wallet. Decisions 12, 15, 16 and the Phase 2 parts of 17-19. |
@@ -238,7 +240,7 @@ Installed on Satish's laptop: `sbx version v0.50.1`. These are read from `sbx --
 | Git Bash on Windows | Rewrites `/opt/...` style arguments to Windows paths before `sbx` sees them. Use `MSYS_NO_PATHCONV=1` in Git Bash. Node `spawn` is not affected. |
 | Sandbox network | Every sandbox has `HTTPS_PROXY=http://gateway.docker.internal:3128` and the proxy CA installed. Direct outbound HTTPS (not through the proxy) also works under the default policy. |
 | `sbx secret set-custom --sandbox X --placeholder P` | Proxy swaps placeholder `P` for the real key on requests to `--host`, only for clients that use the proxy (curl: yes). Setting it on an existing sandbox does not set the env var inside; pass `--env NAME=P` on exec. `sbx rm X` deletes the sandbox-scoped secret. |
-| fx 0.0.16 and the proxy | fx (Zig binary) ignores `HTTPS_PROXY` and connects directly, so the key swap does not happen (HTTP 401). Fix: undocumented `FX_GATEWAY_BASE_URL` + `FX_GATEWAY_CHAT_URL` point fx at a relay on `127.0.0.1:8787` inside the VM (`templates/fx/gateway-relay.mjs`, Node fetch with `NODE_USE_ENV_PROXY=1`), which goes through the proxy. Verified: the real key is not in the VM env or files. |
+| fx 0.0.16 and the proxy | fx (Zig binary) ignores `HTTPS_PROXY` and connects directly, so the key swap does not happen (HTTP 401). Fix: undocumented `FX_GATEWAY_BASE_URL` + `FX_GATEWAY_CHAT_URL` point fx at a relay on loopback inside the VM (Node fetch with `NODE_USE_ENV_PROXY=1`), which goes through the proxy. Since weekend 2 the relay lives in `templates/fx/fx-turn.mjs`, one per turn on an ephemeral port, and also reports the stream. Verified: the real key is not in the VM env or files. |
 | `sbx template save X TAG` | On a running sandbox it asks for confirmation and fails without a TTY (the `--force` it suggests does not exist). On a stopped sandbox it saves without asking: 4.2 s. |
 | `sbx create shell --template TAG --pull never` | 4.5 s from the saved fx template (faster than the 7.8 s base create). First fx turn on it: 3.0 s. |
 | `{id}.localhost` on Windows | curl and browsers resolve it to 127.0.0.1. Node `dns.lookup` and `fetch` do not (ENOTFOUND); Node clients must send the `Host` header. |

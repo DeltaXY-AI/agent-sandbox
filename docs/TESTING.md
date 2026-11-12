@@ -28,3 +28,5 @@ Run steps 1-10 on each template. Mark each cell when it passes.
 ## Checkpoint (end of weekend 2)
 
 Steps 1-5 pass on at least one template. If not, decide: continue, switch to Docker + gVisor, or stop.
+
+**Passed on fx, Nov 12, 2026** (SPEC decision 24): `npm run acceptance`, 18 of 18 checks, 51 s, local Windows host, sbx v0.50.1, fx 0.0.16.

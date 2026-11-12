@@ -1,6 +1,7 @@
 // HarnessAdapter: the only code that knows a specific agent CLI (SPEC section 2).
-// Weekend 1 is non-streaming: runTurn returns the finished turn. startTurn with the
-// 9 events replaces it when streaming lands.
+// runTurn reports progress through onEvent (the harness-neutral TurnEvent subset of the
+// 9 public events) and returns the finished turn. The agent API adds created/completed/failed.
+import type { TurnEvent } from "../events/types.ts";
 import type { ExecRequest, ExecResult } from "../hosts/types.ts";
 
 /** A secret the harness needs inside the sandbox. The host injects it as a placeholder. */
@@ -39,5 +40,5 @@ export type Exec = (request: ExecRequest) => Promise<ExecResult>;
 export interface HarnessAdapter {
   readonly agent: string;
   readonly secrets: SecretRequirement[];
-  runTurn(exec: Exec, input: TurnInput): Promise<TurnResult>;
+  runTurn(exec: Exec, input: TurnInput, onEvent?: (event: TurnEvent) => void): Promise<TurnResult>;
 }

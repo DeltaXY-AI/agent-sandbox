@@ -1,4 +1,7 @@
-// HarnessAdapter for fx (https://github.com/vercel-labs/fx), via `fx ask --json`.
+// HarnessAdapter for fx (https://github.com/vercel-labs/fx). Each turn runs
+// templates/fx/fx-turn.mjs, which wraps `fx ask --json` and reports the model's live
+// stream and tool results as JSON lines (SPEC section 8, weekend 2 spike).
+import type { TurnEvent } from "../events/types.ts";
 import type { Exec, HarnessAdapter, TurnInput, TurnResult } from "./types.ts";
 
 /** Fields of `fx ask --json` we use (fx 0.0.16). */
@@ -13,12 +16,20 @@ interface FxAskResult {
   error?: unknown;
 }
 
-const TURN_SCRIPT = "/opt/agent-sandbox/fx-turn.sh";
+/** One line from fx-turn.mjs. */
+type TurnLine =
+  | { t: "part"; at: number; part: Record<string, unknown> & { type: string } }
+  | { t: "tool_result"; at: number; id: string; tool: string; error: string | null }
+  | { t: "result"; at: number; exit: number; stdout: string; stderr: string };
+
+const TURN_SCRIPT = "/opt/agent-sandbox/fx-turn.mjs";
 const WORKDIR = "/home/agent";
 const TURN_TIMEOUT_MS = 15 * 60_000;
+const MAX_ARG_CHARS = 200;
 
 export function buildFxArgs(input: TurnInput): string[] {
-  const args = [TURN_SCRIPT, "--json", "--no-color", "--full-access", "--model", input.model];
+  const args = ["env", "NODE_USE_ENV_PROXY=1", "node", TURN_SCRIPT];
+  args.push("--json", "--no-color", "--full-access", "--model", input.model);
   if (input.harnessSessionId) args.push("--resume", input.harnessSessionId);
   args.push("--", input.input);
   return args;
@@ -71,17 +82,142 @@ export function parseFxResult(stdout: string, stderr: string, exitCode: number):
   };
 }
 
+/** Tool input arrives as an object or a JSON string. Long strings are clipped. */
+function toolArguments(input: unknown): Record<string, unknown> | undefined {
+  let value = input;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value)) {
+    out[k] =
+      typeof v === "string" && v.length > MAX_ARG_CHARS ? `${v.slice(0, MAX_ARG_CHARS)}...` : v;
+  }
+  return out;
+}
+
+/** One-line summary of a tool call for `label`: the command, path or query it acts on. */
+function toolLabel(args: Record<string, unknown> | undefined): string | undefined {
+  for (const key of ["command", "path", "pattern", "query", "url"]) {
+    const v = args?.[key];
+    if (typeof v === "string" && v) return v.split("\n")[0]?.slice(0, 120);
+  }
+  return undefined;
+}
+
+/**
+ * Turns fx-turn.mjs lines into TurnEvents. Feed stdout chunks with `push`, then call
+ * `finish` with the exec exit code to get the TurnResult.
+ */
+export class FxTurnParser {
+  private pending = "";
+  private result: Extract<TurnLine, { t: "result" }> | undefined;
+  /** Tool calls started and not yet finished, by call id. */
+  private readonly open = new Map<string, { tool: string; at: number }>();
+
+  private readonly onEvent: (e: TurnEvent) => void;
+
+  constructor(onEvent: (e: TurnEvent) => void = () => undefined) {
+    this.onEvent = onEvent;
+  }
+
+  push(chunk: string): void {
+    this.pending += chunk;
+    let nl;
+    while ((nl = this.pending.indexOf("\n")) !== -1) {
+      const line = this.pending.slice(0, nl).trim();
+      this.pending = this.pending.slice(nl + 1);
+      if (line) this.line(line);
+    }
+  }
+
+  finish(execExitCode: number, execStderr: string): TurnResult {
+    if (this.pending.trim()) this.line(this.pending.trim());
+    this.pending = "";
+    const turn = this.result
+      ? parseFxResult(this.result.stdout, this.result.stderr, this.result.exit)
+      : parseFxResult("", execStderr || "fx-turn.mjs ended without a result", execExitCode);
+    // Calls whose result never came back (the turn ended first).
+    for (const [id, call] of this.open) {
+      if (turn.status === "completed") {
+        this.onEvent({ event: "response.tool_call.completed", data: { tool: call.tool } });
+      } else {
+        this.onEvent({
+          event: "response.tool_call.failed",
+          data: { tool: call.tool, error: "The turn ended before the tool finished" },
+        });
+      }
+      this.open.delete(id);
+    }
+    return turn;
+  }
+
+  private line(text: string): void {
+    let line: TurnLine;
+    try {
+      line = JSON.parse(text) as TurnLine;
+    } catch {
+      return; // not ours
+    }
+    if (line.t === "result") {
+      this.result = line;
+      return;
+    }
+    if (line.t === "tool_result") {
+      const call = this.open.get(line.id);
+      this.open.delete(line.id);
+      const tool = call?.tool ?? line.tool;
+      if (line.error) {
+        this.onEvent({ event: "response.tool_call.failed", data: { tool, error: line.error } });
+      } else {
+        const data: { tool: string; duration_ms?: number } = { tool };
+        if (call) data.duration_ms = Math.max(0, line.at - call.at);
+        this.onEvent({ event: "response.tool_call.completed", data });
+      }
+      return;
+    }
+    if (line.t !== "part") return;
+    const p = line.part;
+    if (p.type === "text-delta" && typeof p.delta === "string" && p.delta) {
+      this.onEvent({ event: "response.output_text.delta", data: { text: p.delta } });
+    } else if (p.type === "reasoning-delta" && typeof p.delta === "string" && p.delta) {
+      this.onEvent({ event: "response.reasoning.delta", data: { text: p.delta } });
+    } else if (p.type === "tool-input-start" && typeof p.toolName === "string") {
+      this.onEvent({ event: "response.tool_call.generating", data: { tool: p.toolName } });
+    } else if (p.type === "tool-call" && typeof p.toolName === "string") {
+      const args = toolArguments(p.input);
+      const data: { tool: string; label?: string; arguments?: Record<string, unknown> } = {
+        tool: p.toolName,
+      };
+      const label = toolLabel(args);
+      if (label) data.label = label;
+      if (args) data.arguments = args;
+      if (typeof p.toolCallId === "string") {
+        this.open.set(p.toolCallId, { tool: p.toolName, at: line.at });
+      }
+      this.onEvent({ event: "response.tool_call.started", data });
+    }
+  }
+}
+
 export const fxAdapter: HarnessAdapter = {
   agent: "fx",
   secrets: [
     { env: "AI_GATEWAY_API_KEY", hosts: ["ai-gateway.vercel.sh"], source: "AI_GATEWAY_API_KEY" },
   ],
-  async runTurn(exec: Exec, input: TurnInput): Promise<TurnResult> {
+  async runTurn(exec: Exec, input: TurnInput, onEvent): Promise<TurnResult> {
+    const parser = new FxTurnParser(onEvent);
     const result = await exec({
       cmd: buildFxArgs(input),
       workdir: WORKDIR,
       timeoutMs: TURN_TIMEOUT_MS,
+      onStdout: (chunk) => parser.push(chunk),
     });
-    return parseFxResult(result.stdout, result.stderr, result.exitCode);
+    return parser.finish(result.exitCode, result.stderr);
   },
 };

@@ -33,6 +33,8 @@ export interface ExecRequest {
   env?: Record<string, string>;
   stdin?: string;
   timeoutMs?: number;
+  /** Receives stdout chunks live while the command runs. stdout is still returned at the end. */
+  onStdout?: (chunk: string) => void;
 }
 
 export interface ExecResult {

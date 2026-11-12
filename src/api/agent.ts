@@ -1,10 +1,15 @@
-// Agent API, served at {id}.<domain> (SPEC section 3). Weekend 1: non-streaming turns.
+// Agent API, served at {id}.<domain> (SPEC section 3).
+// A turn runs independently of the HTTP request that started it: it fills a replay
+// buffer, and the streamed reply, the non-streamed reply and reattach all read from it.
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import { z } from "zod";
-import type { HarnessAdapter } from "../harnesses/types.ts";
+import { ResponseStore } from "../events/buffer.ts";
+import { parseLastEventId, sseResponse } from "../events/sse.ts";
+import type { HarnessAdapter, TurnResult } from "../harnesses/types.ts";
 import { ApiError, type InstanceService } from "../instances/service.ts";
 import { TEMPLATES } from "../templates.ts";
+import { filesRoutes } from "./files.ts";
 
 export interface Session {
   id: string;
@@ -49,6 +54,13 @@ export function agentApp(deps: AgentDeps) {
     let map = sessions.get(instanceId);
     if (!map) sessions.set(instanceId, (map = new Map()));
     return map;
+  };
+  /** Replay buffers per instance. */
+  const responses = new Map<string, ResponseStore>();
+  const responsesOf = (instanceId: string) => {
+    let store = responses.get(instanceId);
+    if (!store) responses.set(instanceId, (store = new ResponseStore()));
+    return store;
   };
 
   const app = new Hono<Env>();
@@ -101,9 +113,6 @@ export function agentApp(deps: AgentDeps) {
   app.post("/v1/responses", async (c) => {
     const instanceId = c.env.instanceId;
     const body = responseBody.parse(await c.req.json());
-    if (body.stream) {
-      throw new ApiError(400, "stream_not_supported", "Streaming is not implemented yet");
-    }
     const harness = harnessFor(instanceId);
     const instance = deps.instances.get(instanceId);
     if (instance.status !== "running" && instance.status !== "stopped") {
@@ -139,40 +148,98 @@ export function agentApp(deps: AgentDeps) {
     const model = body.model ?? deps.defaultModel;
     const createdAt = now();
     session.active_response_id = responseId;
-    try {
-      const result = await harness.runTurn((req) => deps.instances.exec(instanceId, req), {
-        input: body.input,
-        model,
-        harnessSessionId: session.harness_session_id,
-      });
-      if (result.harnessSessionId) session.harness_session_id = result.harnessSessionId;
-      session.turns += 1;
-      session.usage.input_tokens += result.usage.inputTokens;
-      session.usage.output_tokens += result.usage.outputTokens;
-      // A failed turn is HTTP 200 with status "failed" (SPEC section 3).
-      return c.json({
-        id: responseId,
-        object: "response",
-        status: result.status,
-        session_id: session.id,
-        agent: harness.agent,
-        model,
-        created_at: createdAt,
-        completed_at: now(),
-        output_text: result.outputText,
-        tool_calls: result.toolCalls,
-        usage: {
-          input_tokens: result.usage.inputTokens,
-          output_tokens: result.usage.outputTokens,
-        },
-        error: result.error ?? null,
-        metadata: body.metadata ?? {},
-      });
-    } finally {
-      session.active_response_id = null;
-      session.updated_at = now();
-    }
+    const buffer = responsesOf(instanceId).create(responseId, session.id);
+    buffer.push({ event: "response.created", data: { id: responseId, session_id: session.id } });
+
+    // Runs to the end even if the client disconnects; reattach reads the buffer.
+    const turn = (async (): Promise<TurnResult> => {
+      try {
+        const result = await harness.runTurn(
+          (req) => deps.instances.exec(instanceId, req),
+          { input: body.input, model, harnessSessionId: session.harness_session_id },
+          (event) => {
+            if (!buffer.done) buffer.push(event);
+          },
+        );
+        if (result.harnessSessionId) session.harness_session_id = result.harnessSessionId;
+        session.turns += 1;
+        session.usage.input_tokens += result.usage.inputTokens;
+        session.usage.output_tokens += result.usage.outputTokens;
+        return result;
+      } catch (err) {
+        console.error(`turn ${responseId} failed:`, err);
+        return {
+          status: "failed",
+          outputText: "",
+          usage: { inputTokens: 0, outputTokens: 0 },
+          toolCalls: [],
+          error: {
+            code: "harness_error",
+            message: err instanceof Error ? err.message : String(err),
+          },
+        };
+      } finally {
+        session.active_response_id = null;
+        session.updated_at = now();
+      }
+    })().then((result) => {
+      const usage = {
+        input_tokens: result.usage.inputTokens,
+        output_tokens: result.usage.outputTokens,
+      };
+      buffer.push(
+        result.status === "completed"
+          ? {
+              event: "response.completed",
+              data: {
+                output_text: result.outputText,
+                usage,
+                context: null,
+                reasoning_effort: null,
+              },
+            }
+          : {
+              event: "response.failed",
+              data: { error: result.error ?? { code: "harness_error", message: "Turn failed" } },
+            },
+      );
+      return result;
+    });
+
+    if (body.stream) return sseResponse(buffer);
+
+    const result = await turn;
+    // A failed turn is HTTP 200 with status "failed" (SPEC section 3).
+    return c.json({
+      id: responseId,
+      object: "response",
+      status: result.status,
+      session_id: session.id,
+      agent: harness.agent,
+      model,
+      created_at: createdAt,
+      completed_at: now(),
+      output_text: result.outputText,
+      tool_calls: result.toolCalls,
+      usage: {
+        input_tokens: result.usage.inputTokens,
+        output_tokens: result.usage.outputTokens,
+      },
+      error: result.error ?? null,
+      metadata: body.metadata ?? {},
+    });
   });
+
+  // Reattach: replay after Last-Event-ID (or from the start), then follow the live turn.
+  app.get("/v1/responses/:responseId/stream", (c) => {
+    const buffer = responsesOf(c.env.instanceId).get(c.req.param("responseId"));
+    if (!buffer) {
+      throw new ApiError(404, "response_not_found", "No such response, or its record expired");
+    }
+    return sseResponse(buffer, parseLastEventId(c.req.header("last-event-id")));
+  });
+
+  app.route("/v1/files", filesRoutes(deps.instances));
 
   app.get("/v1/sessions", (c) =>
     c.json({ data: [...sessionsOf(c.env.instanceId).values()].map(publicSession) }),

@@ -15,6 +15,9 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   { files: ["**/*.mjs", "**/*.js"], languageOptions: { globals: nodeGlobals } },
-  // Demo scripts read loosely shaped JSON responses.
-  { files: ["scripts/**"], rules: { "@typescript-eslint/no-explicit-any": "off" } },
+  // Demo scripts and the acceptance script read loosely shaped JSON responses.
+  {
+    files: ["scripts/**", "test/acceptance/**"],
+    rules: { "@typescript-eslint/no-explicit-any": "off" },
+  },
 );

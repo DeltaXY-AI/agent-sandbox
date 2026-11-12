@@ -69,6 +69,7 @@ export class LocalWindowsHost implements HostProvider {
       env: request.env,
       stdin: request.stdin,
       timeoutMs: request.timeoutMs,
+      onStdout: request.onStdout,
     });
     // sbx prints "sandbox <name> - started" on stderr when exec auto-starts a stopped sandbox.
     const startedLine = new RegExp(`^\\s*\\S*\\s*sandbox ${name} \\S+ started\\r?\\n`, "m");

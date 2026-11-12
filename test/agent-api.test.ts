@@ -44,12 +44,20 @@ function setup() {
   const seen: TurnInput[] = [];
   let release: () => void = () => undefined;
   let block = false;
+  let throwNext = false;
   const harness: HarnessAdapter = {
     agent: "fx",
     secrets: [],
-    async runTurn(_exec, input) {
+    async runTurn(_exec, input, onEvent) {
       seen.push(input);
+      onEvent?.({ event: "response.tool_call.started", data: { tool: "shell", label: "ls" } });
       if (block) await new Promise<void>((r) => (release = r));
+      if (throwNext) {
+        throwNext = false;
+        throw new Error("sbx exec failed (exit 125)");
+      }
+      onEvent?.({ event: "response.tool_call.completed", data: { tool: "shell" } });
+      onEvent?.({ event: "response.output_text.delta", data: { text: `echo: ${input.input}` } });
       return {
         status: "completed",
         outputText: `echo: ${input.input}`,
@@ -76,7 +84,11 @@ function setup() {
     instances,
     seen,
     blockNext: () => (block = true),
-    release: () => release(),
+    throwNext: () => (throwNext = true),
+    release: () => {
+      block = false;
+      release();
+    },
   };
 }
 
@@ -180,6 +192,98 @@ describe("Agent API", () => {
     const inst = await createRunning(app, "base");
     const res = await app.fetch(agentReq(inst.id, inst.agent_key, "/v1/responses", { input: "x" }));
     expect(res.status).toBe(400);
+  });
+});
+
+/** Event names and ids from an SSE body. */
+async function sseFrames(res: Response) {
+  const text = await res.text();
+  return text
+    .split("\n\n")
+    .filter((f) => f.startsWith("id: "))
+    .map((f) => {
+      const [, id = "", event = "", data = ""] =
+        /^id: (\d+)\nevent: (\S+)\ndata: (.*)$/s.exec(f) ?? [];
+      return { id: Number(id), event, data: JSON.parse(data) as Record<string, unknown> };
+    });
+}
+
+describe("Streaming", () => {
+  it("streams the turn as SSE: created, harness events, completed", async () => {
+    const { app } = setup();
+    const inst = await createRunning(app);
+    const res = await app.fetch(
+      agentReq(inst.id, inst.agent_key, "/v1/responses", { input: "hi", stream: true }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+    const frames = await sseFrames(res);
+    expect(frames.map((f) => f.event)).toEqual([
+      "response.created",
+      "response.tool_call.started",
+      "response.tool_call.completed",
+      "response.output_text.delta",
+      "response.completed",
+    ]);
+    expect(frames.map((f) => f.id)).toEqual([1, 2, 3, 4, 5]);
+    expect(frames[4]?.data).toMatchObject({
+      output_text: "echo: hi",
+      usage: { input_tokens: 10, output_tokens: 2 },
+    });
+  });
+
+  it("reattach replays after Last-Event-ID and follows the live turn", async () => {
+    const ctx = setup();
+    const inst = await createRunning(ctx.app);
+    ctx.blockNext();
+    const live = await ctx.app.fetch(
+      agentReq(inst.id, inst.agent_key, "/v1/responses", { input: "x", stream: true }),
+    );
+    // The first client goes away; the turn keeps running.
+    await live.body?.cancel();
+    const responseId = (
+      (await ctx.app.fetch(agentReq(inst.id, inst.agent_key, "/v1/sessions"))).json() as Promise<{
+        data: { active_response_id: string }[];
+      }>
+    ).then((s) => s.data[0]?.active_response_id);
+    const id = await responseId;
+    expect(id).toMatch(/^resp_/);
+    const req = agentReq(inst.id, inst.agent_key, `/v1/responses/${id}/stream`);
+    req.headers.set("last-event-id", "1");
+    const reattached = ctx.app.fetch(req);
+    await new Promise((r) => setTimeout(r, 0));
+    ctx.release();
+    const frames = await sseFrames(await reattached);
+    expect(frames.map((f) => f.id)).toEqual([2, 3, 4, 5]);
+    expect(frames.at(-1)?.event).toBe("response.completed");
+  });
+
+  it("returns 404 response_not_found for an unknown response", async () => {
+    const { app } = setup();
+    const inst = await createRunning(app);
+    const res = await app.fetch(agentReq(inst.id, inst.agent_key, "/v1/responses/resp_x/stream"));
+    expect(res.status).toBe(404);
+  });
+
+  it("a harness error ends the stream with response.failed, and is HTTP 200 when not streamed", async () => {
+    const ctx = setup();
+    const inst = await createRunning(ctx.app);
+    ctx.throwNext();
+    const frames = await sseFrames(
+      await ctx.app.fetch(
+        agentReq(inst.id, inst.agent_key, "/v1/responses", { input: "x", stream: true }),
+      ),
+    );
+    expect(frames.at(-1)).toMatchObject({
+      event: "response.failed",
+      data: { error: { code: "harness_error" } },
+    });
+    ctx.throwNext();
+    const res = await ctx.app.fetch(
+      agentReq(inst.id, inst.agent_key, "/v1/responses", { input: "y" }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ status: "failed", error: { code: "harness_error" } });
   });
 });
 
