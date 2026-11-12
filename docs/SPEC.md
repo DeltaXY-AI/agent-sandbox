@@ -36,6 +36,9 @@
 | 23 | Base distro (Nov 12) | Ubuntu (the `sbx` `shell` image). Alpine is a later measured experiment. |
 | 24 | Weekend 2 checkpoint template (Nov 12) | fx. Acceptance steps 1-5 (streaming, reattach, files API) are built and proven on fx. Pi, eve and Claude Code are added later as adapters on top of the same features; decision 9 still defines the Phase 1 proof. |
 | 25 | Deployment (Nov 12) | Immutable: `deploy/cloud-init.yaml` (cloud-independent host recipe, no secrets) plus one script per cloud (`scripts/deploy-do.ts`). Every deploy builds a new server, tests it, then retires the old one. Secrets go over SSH after boot. |
+| 26 | Sandbox engine (Nov 12) | `sbx` is the engine for building and testing only (internal use; see section 8, Docker's terms). Before any external customer, a Firecracker-class `HostProvider` replaces it, chosen by a spike (Firecracker directly, E2B self-hosted, Docker + gVisor). New lifecycle features are written against the `HostProvider` interface, not `sbx` details. |
+| 27 | Fork (Nov 12) | Moves after the engine switch: Firecracker snapshots (memory and disk) do it better than `sbx template save`. Acceptance step 7 waits for it. |
+| 28 | Idle timeout (Nov 12) | 15 minutes by default. |
 
 ---
 
@@ -181,7 +184,7 @@ Any state -> `failed`. `deleting -> deleted`.
 |---|---|
 | Weekend 1 | `sbx` on Windows driven from Node: create, exec, delete. Sandbox API (`/v1/instances`, exec, stop, start) on the `base` template. fx template. `/v1/responses` non-streaming on fx. Demo: Agent37's "first agent message" and a hello.py turn. Repo public with README, AGENTS.md, this spec. |
 | **Weekend 2 - checkpoint** | **One template passes acceptance steps 1-5.** If not: decide to continue, switch to Docker + gVisor, or stop. **Passed on fx, Nov 12, 2026** (`npm run acceptance`). |
-| Weekend 3 | Pi and eve adapters. Fork, sleep and wake, public ports. Keys and meter. |
+| Weekend 3 | Pi and eve adapters. Sleep and wake, public ports. Keys and meter. (Fork moves after the engine switch, decision 27.) |
 | Weekend 4 | All three templates pass the full acceptance script. First cloud experiment (KVM check on Hetzner and DigitalOcean). |
 | Phase 2 | Remaining `sbx` harnesses, backups, crons, metrics, profiles, regions, custom images, wallet. Decisions 12, 15, 16 and the Phase 2 parts of 17-19. |
 | Not yet placed in a weekend | Phase 1 additions from decisions 13, 14 and the Phase 1 parts of 17-19. |
@@ -279,7 +282,7 @@ Mapping from the relay: text-delta -> `response.output_text.delta`; reasoning-de
 | 1 | Does a stopped local sandbox keep the agent's session files and installed packages? | Stop, exec, compare. |
 | 2 | How long do `template save` and create-from-template take locally? Is fork fast enough to be useful? | Time it. |
 | 3 | Can Pi and eve run as kits? | Build a minimal kit for each. |
-| 4 | Do Docker's terms allow running local `sbx` as a hosted multi-tenant service? | Read Docker's terms before any public hosting. |
+| 4 | Do Docker's terms allow running local `sbx` as a hosted multi-tenant service? | **Answered Nov 12, 2026: not without written permission from Docker** (read of the published text, not legal advice). `sbx` is proprietary and "subject to the Docker Subscription Service Agreement" (package `copyright` file; `sbx login` says logging in accepts it). The DSSA (Aug 26, 2026) licenses use "for Customer's internal business purposes" (2.1) and forbids to "lease, rent, loan, or otherwise transfer the Services to any third party" and to operate "products or services intended to be offered to third parties in competition with the Services" (3.3); Docker sells Cloud Sandboxes and a Sandboxes API. Personal accounts are non-commercial (3.1(a)). The docs FAQ calls local `sbx` "free to use, including for commercial and professional work", but says nothing about hosting for others. Outcome: decision 26. Sources: https://www.docker.com/legal/docker-subscription-service-agreement/ , https://docs.docker.com/ai/sandboxes/faq/ , https://github.com/docker/sbx-releases (LICENSE). |
 | 5 | Do Hetzner cloud VMs expose KVM for local-mode `sbx` on Linux? (DigitalOcean: yes, see above.) | Smallest VM, `ls /dev/kvm`, `sbx diagnose`. Fallback: bare metal. |
 
 ---

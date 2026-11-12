@@ -52,12 +52,13 @@ for (const ip of ips) {
     if (i >= 60) throw new Error(`reserved IP ${ip} still assigned after 2 minutes`);
     spawnSync(process.execPath, ["-e", "setTimeout(() => {}, 2000)"]);
   }
-  deleteOk("compute", "reserved-ip", "delete", ip);
-  // DigitalOcean can accept the delete and still list the IP (seen Nov 12, 2026). Say so.
+  // After its droplet is deleted, DigitalOcean answers 422 "unprocessable" or accepts the
+  // delete and keeps listing the IP for about 3 minutes (seen twice, Nov 12, 2026). Retry.
   const listed = () =>
     (doctl("compute", "reserved-ip", "list") as { ip: string }[]).some((r) => r.ip === ip);
-  for (let i = 0; i < 15 && listed(); i++) {
-    spawnSync(process.execPath, ["-e", "setTimeout(() => {}, 2000)"]);
+  for (let i = 0; i < 30 && listed(); i++) {
+    spawnSync("doctl", ["compute", "reserved-ip", "delete", ip, "--force"], { windowsHide: true });
+    if (listed()) spawnSync(process.execPath, ["-e", "setTimeout(() => {}, 10000)"]);
   }
   if (listed()) {
     console.log(`WARNING: reserved IP ${ip} is still listed. Retry later:`);
