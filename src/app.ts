@@ -1,6 +1,8 @@
 // Builds the HTTP app. Kept separate from server.ts so tests can call it without a socket.
 //   api host (localhost:3000)         -> Sandbox API, Authorization: Bearer <key>
 //   {id}.localhost:3000               -> Agent API for that instance, X-Agent-Key
+//   {id}-{port}.localhost:3000        -> preview URL: a port inside it (key or signed URL)
+//   {prefix}-{id} or slug .localhost  -> public port: no credential (webhooks)
 import { timingSafeEqual } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { ZodError } from "zod";
@@ -9,6 +11,9 @@ import { instancesRoutes } from "./api/instances.ts";
 import type { HarnessAdapter } from "./harnesses/types.ts";
 import { SbxError } from "./lib/sbx.ts";
 import { ApiError, type InstanceService } from "./instances/service.ts";
+import { parseHost } from "./router/hosts.ts";
+import { PublicPorts, UrlSigner } from "./router/ports.ts";
+import { portsRouter } from "./router/ports-router.ts";
 
 export interface AppDeps {
   apiKey: string;
@@ -20,6 +25,8 @@ export interface AppDeps {
   sandboxPrefix: string;
   /** Resolve template secrets from host env vars. */
   secretsForTemplate: (template: string) => { env: string; hosts: string[]; value: string }[];
+  /** Full URL for a host label, e.g. `sb-abc-8080` -> `http://sb-abc-8080.localhost:3000`. */
+  hostUrl?: (label: string) => string;
 }
 
 function sameKey(given: string, expected: string): boolean {
@@ -51,10 +58,8 @@ export function handleError(err: Error, c: Context) {
 
 /** `sb-abc123.localhost:3000` -> `sb-abc123`. */
 export function agentHostId(host: string | undefined, prefix: string): string | undefined {
-  const name = (host ?? "").toLowerCase().split(":")[0] ?? "";
-  const [label, ...rest] = name.split(".");
-  if (!label || rest.length === 0 || !label.startsWith(prefix)) return undefined;
-  return label;
+  const route = parseHost(host, prefix);
+  return route.kind === "agent" ? route.id : undefined;
 }
 
 export function buildApp(deps: AppDeps) {
@@ -63,11 +68,26 @@ export function buildApp(deps: AppDeps) {
   agent.onError(handleError);
   agent.notFound((c) => c.json({ error: { code: "not_found", message: "No such route" } }, 404));
 
-  // Router: instance subdomains go to the Agent API.
+  const hostUrl = deps.hostUrl ?? ((label: string) => `http://${label}.localhost`);
+  const publicPorts = new PublicPorts();
+  const signer = new UrlSigner(deps.apiKey);
+  const ports = portsRouter({
+    apiKey: deps.apiKey,
+    instances: deps.instances,
+    publicPorts,
+    signer,
+  });
+
+  // Router: instance subdomains go to the Agent API, preview URLs and public ports.
   app.use("*", async (c, next) => {
-    const instanceId = agentHostId(c.req.header("host"), deps.sandboxPrefix);
-    if (!instanceId) return next();
-    return agent.fetch(c.req.raw, { instanceId });
+    const route = parseHost(c.req.header("host"), deps.sandboxPrefix);
+    if (route.kind === "agent") return agent.fetch(c.req.raw, { instanceId: route.id });
+    if (route.kind === "preview") return ports.preview(c.req.raw, route.id, route.port);
+    if (route.kind === "public") {
+      const res = await ports.publicPort(c.req.raw, route.label);
+      if (res) return res;
+    }
+    return next();
   });
 
   app.use("/v1/*", async (c, next) => {
@@ -84,7 +104,11 @@ export function buildApp(deps: AppDeps) {
 
   app.route(
     "/v1/instances",
-    instancesRoutes(deps.instances, deps.templates, deps.secretsForTemplate),
+    instancesRoutes(deps.instances, deps.templates, deps.secretsForTemplate, {
+      publicPorts,
+      signer,
+      hostUrl,
+    }),
   );
 
   app.notFound((c) => c.json({ error: { code: "not_found", message: "No such route" } }, 404));

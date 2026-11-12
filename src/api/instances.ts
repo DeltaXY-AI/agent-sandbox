@@ -8,6 +8,35 @@ import {
   MIN_IDLE_TIMEOUT_SECONDS,
   type InstanceService,
 } from "../instances/service.ts";
+import {
+  SIGNED_URL_DEFAULT_TTL,
+  SIGNED_URL_MAX_TTL,
+  SIGNED_URL_MIN_TTL,
+  TOKEN_PARAM,
+  type PublicPort,
+  type PublicPorts,
+  type UrlSigner,
+} from "../router/ports.ts";
+
+const port = z.number().int().min(1).max(65_535);
+const publicPortBody = z.object({
+  port,
+  prefix: z
+    .string()
+    .regex(/^[a-z0-9-]{1,30}$/, "1-30 lowercase letters, digits or hyphens")
+    .optional(),
+  label: z.string().max(100).optional(),
+});
+const signedUrlBody = z.object({
+  port,
+  ttl_seconds: z.number().int().default(SIGNED_URL_DEFAULT_TTL),
+});
+
+export interface PortsDeps {
+  publicPorts: PublicPorts;
+  signer: UrlSigner;
+  hostUrl: (label: string) => string;
+}
 
 const createBody = z.object({
   template: z.string().default("base"),
@@ -22,6 +51,8 @@ const createBody = z.object({
     .min(MIN_IDLE_TIMEOUT_SECONDS)
     .max(MAX_IDLE_TIMEOUT_SECONDS)
     .default(DEFAULT_IDLE_TIMEOUT_SECONDS),
+  /** Permanent unauthenticated URLs (webhooks). */
+  public_ports: z.array(publicPortBody).max(50).default([]),
 });
 
 const execBody = z.object({
@@ -38,8 +69,16 @@ export function instancesRoutes(
   service: InstanceService,
   templates: string[],
   secretsForTemplate: (template: string) => SandboxSecret[],
+  ports: PortsDeps,
 ) {
   const app = new Hono();
+  const showPort = (p: PublicPort) => ({
+    port: p.port,
+    prefix: p.prefix,
+    label: p.label,
+    url: ports.hostUrl(p.host_label),
+    created_at: p.created_at,
+  });
 
   app.post("/", async (c) => {
     const body = createBody.parse(await c.req.json().catch(() => ({})));
@@ -55,7 +94,26 @@ export function instancesRoutes(
       );
     }
     const secrets = secretsForTemplate(body.template);
-    return c.json(service.create({ ...body, secrets }), 201);
+    const { public_ports: wanted, ...rest } = body;
+    // Check before creating anything: duplicates are the only way adding can fail here.
+    const seen = new Set<string>();
+    for (const p of wanted) {
+      for (const key of [`port:${p.port}`, p.prefix ? `prefix:${p.prefix}` : ""]) {
+        if (key && seen.has(key)) {
+          return c.json(
+            { error: { code: "public_port_exists", message: `Duplicate ${key}` } },
+            409,
+          );
+        }
+        seen.add(key);
+      }
+    }
+    const instance = service.create({ ...rest, secrets });
+    for (const p of wanted) ports.publicPorts.add(instance.id, p);
+    return c.json(
+      { ...instance, public_ports: ports.publicPorts.list(instance.id).map(showPort) },
+      201,
+    );
   });
 
   app.get("/", async (c) => {
@@ -94,7 +152,44 @@ export function instancesRoutes(
 
   app.delete("/:id", async (c) => {
     await service.delete(c.req.param("id"));
+    ports.publicPorts.removeInstance(c.req.param("id"));
     return c.body(null, 204);
+  });
+
+  // Public ports: permanent unauthenticated URLs (Agent37 shapes).
+  app.get("/:id/public-ports", (c) => {
+    service.get(c.req.param("id"));
+    return c.json({ data: ports.publicPorts.list(c.req.param("id")).map(showPort) });
+  });
+
+  app.post("/:id/public-ports", async (c) => {
+    service.get(c.req.param("id"));
+    const body = publicPortBody.parse(await c.req.json());
+    return c.json(showPort(ports.publicPorts.add(c.req.param("id"), body)), 201);
+  });
+
+  app.delete("/:id/public-ports/:port", (c) => {
+    service.get(c.req.param("id"));
+    const p = Number(c.req.param("port"));
+    if (!ports.publicPorts.remove(c.req.param("id"), p)) {
+      return c.json({ error: { code: "not_found", message: `Port ${p} is not public` } }, 404);
+    }
+    return c.json({ port: p, deleted: true });
+  });
+
+  // Signed URL: a time-limited link to a preview URL that a browser can open.
+  app.post("/:id/signed-url", async (c) => {
+    const id = c.req.param("id");
+    service.get(id);
+    const body = signedUrlBody.parse(await c.req.json());
+    const ttl = Math.min(SIGNED_URL_MAX_TTL, Math.max(SIGNED_URL_MIN_TTL, body.ttl_seconds));
+    const expiresAt = new Date(Date.now() + ttl * 1000);
+    const token = ports.signer.sign(id, body.port, expiresAt);
+    return c.json({
+      url: `${ports.hostUrl(`${id}-${body.port}`)}/?${TOKEN_PARAM}=${encodeURIComponent(token)}`,
+      port: body.port,
+      expires_at: expiresAt.toISOString(),
+    });
   });
 
   return app;

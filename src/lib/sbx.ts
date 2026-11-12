@@ -156,6 +156,26 @@ export function holdOpen(name: string) {
   });
 }
 
+export interface SbxPort {
+  host_ip: string;
+  host_port: number;
+  sandbox_port: number;
+  protocol: string;
+}
+
+export async function listPorts(name: string): Promise<SbxPort[]> {
+  const result = await runSbxOk(["ports", name, "--json"]);
+  return result.stdout.trim() ? (JSON.parse(result.stdout) as SbxPort[]) : [];
+}
+
+/** Publish a sandbox port on an ephemeral loopback port. Publishing twice adds a second mapping. */
+export async function publishPort(name: string, port: number): Promise<SbxPort> {
+  const result = await runSbxOk(["ports", name, "--publish", String(port), "--json"]);
+  const [mapping] = JSON.parse(result.stdout) as SbxPort[];
+  if (!mapping) throw new Error(`sbx ports --publish ${port} returned no mapping`);
+  return mapping;
+}
+
 export async function startSandbox(name: string): Promise<void> {
   await execInSandbox(name, ["true"]);
 }

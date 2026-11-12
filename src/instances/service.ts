@@ -233,6 +233,15 @@ export class InstanceService {
     }
   }
 
+  /** Where to reach `port` inside an awake instance. Call inside use(). */
+  portAddress(id: string, port: number): Promise<{ host: string; port: number }> {
+    return this.host.portAddress(id, port);
+  }
+
+  forgetPort(id: string, port: number): void {
+    this.host.forgetPort(id, port);
+  }
+
   exec(id: string, request: ExecRequest): Promise<ExecResult> {
     return this.use(id, () => this.host.exec(id, request));
   }

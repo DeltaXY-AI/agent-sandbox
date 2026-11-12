@@ -55,5 +55,12 @@ export interface HostProvider {
   sleep(name: string): Promise<void>;
   /** Resume a sleeping sandbox. sbx: start. Firecracker: restore the snapshot. */
   wake(name: string): Promise<void>;
+  /**
+   * Where the control plane can reach `port` inside an awake sandbox (publishing it if
+   * needed). The address may change after a wake; call again rather than caching.
+   */
+  portAddress(name: string, port: number): Promise<{ host: string; port: number }>;
+  /** Forget a cached address that stopped answering. */
+  forgetPort(name: string, port: number): void;
   delete(name: string): Promise<void>;
 }

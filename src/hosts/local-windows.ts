@@ -5,7 +5,9 @@ import {
   createSandbox,
   execInSandbox,
   holdOpen,
+  listPorts,
   listSandboxes,
+  publishPort,
   removeSandbox,
   setCustomSecret,
   startSandbox,
@@ -49,6 +51,28 @@ export class LocalWindowsHost implements HostProvider {
     const child = this.holds.get(name);
     this.holds.delete(name);
     child?.kill();
+    // sbx re-creates port mappings on new host ports after a start (SPEC section 8).
+    this.ports.delete(name);
+  }
+
+  /** sandbox port -> loopback host port, valid until the sandbox stops. */
+  private readonly ports = new Map<string, Map<number, number>>();
+
+  async portAddress(name: string, port: number): Promise<{ host: string; port: number }> {
+    let known = this.ports.get(name);
+    if (!known) this.ports.set(name, (known = new Map()));
+    let hostPort = known.get(port);
+    if (hostPort === undefined) {
+      // Publishing twice adds a second mapping, so look first.
+      const existing = (await listPorts(name)).find((p) => p.sandbox_port === port);
+      hostPort = existing?.host_port ?? (await publishPort(name, port)).host_port;
+      known.set(port, hostPort);
+    }
+    return { host: "127.0.0.1", port: hostPort };
+  }
+
+  forgetPort(name: string, port: number): void {
+    this.ports.get(name)?.delete(port);
   }
 
   static templates(): string[] {

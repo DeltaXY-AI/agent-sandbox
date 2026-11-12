@@ -35,6 +35,12 @@ class FakeHost implements HostProvider {
   async start(name: string) {
     this.sandboxes.set(name, "running");
   }
+  /** Where portAddress points: a test HTTP server standing in for a port inside the sandbox. */
+  upstreamPort = 1;
+  async portAddress() {
+    return { host: "127.0.0.1", port: this.upstreamPort };
+  }
+  forgetPort() {}
   wakeDelayMs = 0;
   wakes = 0;
   async sleep(name: string) {
@@ -450,5 +456,156 @@ describe("Sleep and wake", () => {
     ).json()) as { idle_timeout_seconds: number; last_active_at: string };
     expect(created.idle_timeout_seconds).toBe(900);
     expect(created.last_active_at).toMatch(/^\d{4}-/);
+  });
+});
+
+describe("Preview URLs and public ports", () => {
+  const auth = { authorization: "Bearer k", "content-type": "application/json" };
+  const at = (label: string, path = "/", headers: Record<string, string> = {}) =>
+    new Request(`http://${label}.localhost${path}`, {
+      headers: { host: `${label}.localhost`, ...headers },
+    });
+
+  /** A real HTTP server standing in for a web server the agent started in the sandbox. */
+  async function upstream() {
+    const { createServer } = await import("node:http");
+    const seen: { url: string; headers: Record<string, unknown> }[] = [];
+    const server = createServer((req, res) => {
+      seen.push({ url: req.url ?? "", headers: req.headers });
+      res.setHeader("content-type", "text/plain");
+      res.end(`hello from 8080 ${req.url}`);
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    const port = (server.address() as { port: number }).port;
+    return { port, seen, close: () => new Promise((r) => server.close(r)) };
+  }
+
+  it("preview URL needs a credential and never forwards ours", async () => {
+    const ctx = setup();
+    const up = await upstream();
+    ctx.host.upstreamPort = up.port;
+    const inst = await createRunning(ctx.app);
+    const label = `${inst.id}-8080`;
+
+    expect((await ctx.app.fetch(at(label))).status).toBe(401);
+
+    const viaKey = await ctx.app.fetch(at(label, "/a?x=1", { authorization: "Bearer k" }));
+    expect(viaKey.status).toBe(200);
+    expect(await viaKey.text()).toBe("hello from 8080 /a?x=1");
+    expect(up.seen.at(-1)?.headers.authorization).toBeUndefined();
+    expect(up.seen.at(-1)?.headers["x-forwarded-host"]).toBe(`${label}.localhost`);
+
+    const viaAgentKey = await ctx.app.fetch(at(label, "/", { "x-agent-key": inst.agent_key }));
+    expect(viaAgentKey.status).toBe(200);
+    expect(up.seen.at(-1)?.headers["x-agent-key"]).toBeUndefined();
+
+    const other = await ctx.app.fetch(at("sb-0000000000-8080", "/", { authorization: "Bearer k" }));
+    expect(other.status).toBe(404);
+    await up.close();
+  });
+
+  it("signed URL opens the preview, becomes a cookie, and only for its port", async () => {
+    const ctx = setup();
+    const up = await upstream();
+    ctx.host.upstreamPort = up.port;
+    const inst = await createRunning(ctx.app);
+    const signed = (await (
+      await ctx.app.request(`/v1/instances/${inst.id}/signed-url`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ port: 8080, ttl_seconds: 5 }),
+      })
+    ).json()) as { url: string; expires_at: string };
+    const url = new URL(signed.url);
+    expect(url.hostname).toBe(`${inst.id}-8080.localhost`);
+    // ttl below the minimum is clamped to 60 s.
+    expect(Date.parse(signed.expires_at) - Date.now()).toBeGreaterThan(50_000);
+
+    const first = await ctx.app.fetch(at(`${inst.id}-8080`, `${url.pathname}${url.search}`));
+    expect(first.status).toBe(200);
+    expect(up.seen.at(-1)?.url).toBe("/"); // token stripped before the sandbox sees it
+    const cookie = first.headers.get("set-cookie") ?? "";
+    expect(cookie).toMatch(/^as_token=.+; Max-Age=\d+; Path=\/; HttpOnly/);
+
+    const again = await ctx.app.fetch(
+      at(`${inst.id}-8080`, "/next", { cookie: cookie.split(";")[0] ?? "" }),
+    );
+    expect(again.status).toBe(200);
+    expect(up.seen.at(-1)?.headers.cookie).toBeUndefined();
+
+    const wrongPort = await ctx.app.fetch(at(`${inst.id}-9090`, `/${url.search}`));
+    expect(wrongPort.status).toBe(401);
+    await up.close();
+  });
+
+  it("public ports need no credential, and can be listed and removed", async () => {
+    const ctx = setup();
+    const up = await upstream();
+    ctx.host.upstreamPort = up.port;
+    const created = (await (
+      await ctx.app.request("/v1/instances", {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ template: "fx", public_ports: [{ port: 8080, prefix: "hooks" }] }),
+      })
+    ).json()) as { id: string; public_ports: { url: string }[] };
+    await new Promise((r) => setTimeout(r, 0));
+    expect(created.public_ports[0]?.url).toBe(`http://hooks-${created.id}.localhost`);
+
+    const res = await ctx.app.fetch(at(`hooks-${created.id}`, "/webhook"));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("hello from 8080 /webhook");
+
+    const added = (await (
+      await ctx.app.request(`/v1/instances/${created.id}/public-ports`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ port: 9000 }),
+      })
+    ).json()) as { url: string };
+    expect(new URL(added.url).hostname).toMatch(/^[a-z0-9]{20}\.localhost$/);
+    const dup = await ctx.app.request(`/v1/instances/${created.id}/public-ports`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ port: 9000 }),
+    });
+    expect(dup.status).toBe(409);
+
+    const list = (await (
+      await ctx.app.request(`/v1/instances/${created.id}/public-ports`, { headers: auth })
+    ).json()) as { data: { port: number }[] };
+    expect(list.data.map((p) => p.port)).toEqual([8080, 9000]);
+
+    const del = await ctx.app.request(`/v1/instances/${created.id}/public-ports/8080`, {
+      method: "DELETE",
+      headers: auth,
+    });
+    expect(await del.json()).toEqual({ port: 8080, deleted: true });
+    expect((await ctx.app.fetch(at(`hooks-${created.id}`))).status).toBe(404);
+    await up.close();
+  });
+
+  it("wakes a sleeping instance, 503 when stopped, 502 when nothing listens", async () => {
+    const ctx = setup();
+    const up = await upstream();
+    ctx.host.upstreamPort = up.port;
+    const inst = await createRunning(ctx.app);
+    const key = { authorization: "Bearer k" };
+
+    await ctx.instances.sleep(inst.id);
+    const woke = await ctx.app.fetch(at(`${inst.id}-8080`, "/", key));
+    expect(woke.status).toBe(200);
+    expect(ctx.host.wakes).toBe(1);
+
+    await ctx.instances.stop(inst.id);
+    const stopped = await ctx.app.fetch(at(`${inst.id}-8080`, "/", key));
+    expect(stopped.status).toBe(503);
+    expect(await stopped.json()).toMatchObject({ error: { code: "unavailable" } });
+
+    await ctx.instances.start(inst.id);
+    await up.close();
+    const nothing = await ctx.app.fetch(at(`${inst.id}-8080`, "/", key));
+    expect(nothing.status).toBe(502);
+    expect(await nothing.json()).toMatchObject({ error: { code: "upstream_unavailable" } });
   });
 });

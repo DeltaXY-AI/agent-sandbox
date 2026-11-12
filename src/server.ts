@@ -10,11 +10,9 @@ import { TEMPLATES } from "./templates.ts";
 
 const config = loadConfig();
 const host = new LocalWindowsHost();
-const instances = new InstanceService(
-  host,
-  config.sandboxPrefix,
-  (id) => `http://${id}.localhost:${config.port}`,
-);
+/** Every sandbox URL is a subdomain of localhost for now: Agent API, preview URLs, public ports. */
+const hostUrl = (label: string) => `http://${label}.localhost:${config.port}`;
+const instances = new InstanceService(host, config.sandboxPrefix, hostUrl);
 
 /** The secrets a template's harness needs, with values from this process's env. */
 function secretsForTemplate(template: string): SandboxSecret[] {
@@ -41,6 +39,7 @@ const app = buildApp({
   defaultModel: config.defaultModel,
   sandboxPrefix: config.sandboxPrefix,
   secretsForTemplate,
+  hostUrl,
 });
 
 const server = serve({ fetch: app.fetch, port: config.port, hostname: "127.0.0.1" }, (info) => {

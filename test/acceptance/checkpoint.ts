@@ -1,5 +1,5 @@
-// Weekend 2 checkpoint plus sleep/wake: docs/TESTING.md steps 1-5 and 8 on one template,
-// against a running server.
+// Acceptance: docs/TESTING.md steps 1-6 and 8 on one template (weekend 2 checkpoint,
+// public ports, sleep and wake), against a running server.
 // Run:  node --env-file=.env test/acceptance/checkpoint.ts            (template fx, port 3000)
 // Env:  TEMPLATE (default fx), PORT (default 3000), AGENT_SANDBOX_API_KEY
 // Costs a few model tokens. Prints PASS/FAIL per check; exit code 1 if any check fails.
@@ -258,6 +258,60 @@ try {
     ls.json?.exit_code === 0 && /^hello\.py$/m.test(ls.json?.stdout ?? ""),
     JSON.stringify(ls.json?.stdout),
   );
+
+  // Step 6: the agent starts a web server on 8080; reach it through the router.
+  console.log("\n== step 6: public ports");
+  const pub = await api("POST", `/v1/instances/${id}/public-ports`, {
+    port: 8080,
+    prefix: "web",
+  });
+  check(
+    "POST /public-ports -> 201 with a URL",
+    pub.status === 201 && pub.json?.url?.includes(`web-${id}.localhost`),
+    pub.json?.url,
+  );
+  const serve = await agent("POST", "/v1/responses", {
+    input:
+      "Start a web server on port 8080 that serves /home/agent and keeps running after you finish: " +
+      "run `cd /home/agent && nohup python3 -m http.server 8080 > /tmp/http.log 2>&1 &`, " +
+      "then check it with curl and reply with one short sentence.",
+    session_id: sessionId,
+  });
+  check(
+    "agent turn to start the server completes",
+    serve.status === 200 && JSON.parse(serve.text || "{}").status === "completed",
+  );
+  const previewHost = `${id}-8080.localhost`;
+  let page = await call("GET", previewHost, "/hello.py", { authorization: `Bearer ${key}` });
+  for (let i = 0; i < 10 && page.status !== 200; i++) {
+    await new Promise((r) => setTimeout(r, 1000)); // the server may still be starting
+    page = await call("GET", previewHost, "/hello.py", { authorization: `Bearer ${key}` });
+  }
+  check(
+    `preview URL http://${previewHost} with the API key serves hello.py`,
+    page.status === 200 && /hello/.test(page.text),
+    `${page.status} ${JSON.stringify(page.text.slice(0, 40))}`,
+  );
+  const noKey = await call("GET", previewHost, "/", {});
+  check("preview URL without a credential -> 401", noKey.status === 401, `got ${noKey.status}`);
+  const signed = await api("POST", `/v1/instances/${id}/signed-url`, { port: 8080 });
+  const signedUrl = new URL(signed.json?.url ?? "http://x/");
+  const viaSigned = await call("GET", previewHost, `/hello.py${signedUrl.search}`, {});
+  check(
+    "signed URL opens the preview without a key and sets a cookie",
+    viaSigned.status === 200 && String(viaSigned.headers["set-cookie"]).includes("as_token="),
+    `got ${viaSigned.status}`,
+  );
+  const publicPage = await call("GET", `web-${id}.localhost`, "/hello.py", {});
+  check(
+    "public port URL works with no credential",
+    publicPage.status === 200 && /hello/.test(publicPage.text),
+    `got ${publicPage.status}`,
+  );
+  const nothing = await call("GET", `${id}-8099.localhost`, "/", {
+    authorization: `Bearer ${key}`,
+  });
+  check("a port nothing listens on -> 502", nothing.status === 502, `got ${nothing.status}`);
 
   // Step 8: sleep, send a message, it wakes and the session continues.
   // Also answers SPEC open question 1: do installed files and the harness's own

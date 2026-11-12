@@ -39,6 +39,7 @@
 | 26 | Sandbox engine (Nov 12) | `sbx` is the engine for building and testing only (internal use; see section 8, Docker's terms). Before any external customer, a Firecracker-class `HostProvider` replaces it, chosen by a spike (Firecracker directly, E2B self-hosted, Docker + gVisor). New lifecycle features are written against the `HostProvider` interface, not `sbx` details. |
 | 27 | Fork (Nov 12) | Moves after the engine switch: Firecracker snapshots (memory and disk) do it better than `sbx template save`. Acceptance step 7 waits for it. |
 | 28 | Idle timeout (Nov 12) | 15 minutes by default. |
+| 29 | Ports (Nov 12) | Agent37's model. Preview URL `{id}-{port}.<domain>` for any port, no registration, needs a credential: the API key (`Authorization: Bearer`), that instance's `X-Agent-Key`, or a signed URL. `public_ports` give permanent unauthenticated URLs (`{prefix}-{id}` or a 20-character slug) for webhooks. The bare `{id}.<domain>` stays the Agent API, so acceptance step 6 opens the preview URL. WebSockets come after step 6. |
 
 ---
 
@@ -123,6 +124,8 @@ Adding a cloud means adding one HostProvider. Adding a harness means adding one 
 | GET | `/v1/instances`, `/v1/instances/{id}` | 1 |
 | POST | `/v1/instances/{id}/stop`, `/start`, `/sleep`, `/restart` | 1 |
 | POST | `/v1/instances/{id}/fork` | 1 |
+| GET/POST/DELETE | `/v1/instances/{id}/public-ports[/{port}]` (`{port, prefix?, label?}`; at most 50; `409 public_port_exists`) | 1 |
+| POST | `/v1/instances/{id}/signed-url` (`{port, ttl_seconds}`, default 3600, clamped to 60-604800; returns `{url, port, expires_at}`) | 1 |
 | POST | `/v1/instances/{id}/exec` | 1 |
 | GET | `/v1/instances/{id}/logs` | 1 |
 | DELETE | `/v1/instances/{id}` | 1 |
@@ -203,7 +206,7 @@ Run steps 1-10 on each of **Pi, eve and Claude Code**. Then run step 11 once.
 3. Start a second streamed turn. Disconnect halfway. Reattach via `/v1/responses/{id}/stream` and receive the rest with no gap and no duplicate.
 4. Read `hello.py` through the files API.
 5. Run `ls /home/agent` through exec and see `hello.py`.
-6. Ask the agent to start a web server on port 8080. Open `http://{id}.localhost` and get a response.
+6. Ask the agent to start a web server on port 8080. Open the preview URL `http://{id}-8080.localhost` (with the key or a signed URL) and a public port URL, and get a response.
 7. Fork the sandbox. The fork has `hello.py` and the full session history.
 8. Put the original to sleep. Send a message. It wakes, and the session continues with the earlier history.
 9. Using a key from a second workspace, try to read the first workspace's files. Get 401 or 404. From inside the second sandbox, try to reach the first sandbox over the network. Get refused.
@@ -251,6 +254,9 @@ Installed on Satish's laptop: `sbx version v0.50.1`. These are read from `sbx --
 | `sbx create shell --template TAG --pull never` | 4.5 s from the saved fx template (faster than the 7.8 s base create). First fx turn on it: 3.0 s. |
 | `{id}.localhost` on Windows | curl and browsers resolve it to 127.0.0.1. Node `dns.lookup` and `fetch` do not (ENOTFOUND); Node clients must send the `Host` header. |
 | Idle auto-stop | A local sandbox with no open exec stops by itself about 30 s after the last exec ends (measured: 35 s idle; a 75 s `sleep` exec held it up until 105 s). No `sbx settings` key or `create` flag changes it (`--ttl` is cloud only). It also kills anything the agent left running, such as a web server. Fix: `LocalWindowsHost` keeps one `sbx exec <name> sleep infinity` open while a sandbox should be awake and kills it on sleep, stop and delete, so the platform's idle timer decides. |
+| `sbx ports --publish P --json` | Returns `[{action, host_ip: "127.0.0.1", host_port, sandbox_port, protocol: "tcp4"}]`; `sbx ports X --json` lists the same fields. Host ports are ephemeral (60000, 60001, ...). Publishing a port that is already published adds a second mapping, so check the list first. Nothing listening on the sandbox port: the host connection is reset (curl exit 56), no HTTP status. |
+| Ports across sleep | `sbx stop` drops the mappings; on the next start sbx restores them by itself on new host ports (60000 -> 60002). Never cache a host port across a wake. Processes do not survive (a server started before the stop is gone after it). |
+| Background processes from exec | `nohup python3 -m http.server 8080 &` started through `sbx exec` keeps running after that exec ends (while the sandbox stays up). |
 
 ### Tested by running on DigitalOcean (Ubuntu 24.04 droplet, Nov 12, 2026)
 
