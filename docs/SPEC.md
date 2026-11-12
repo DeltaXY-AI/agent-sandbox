@@ -30,6 +30,10 @@
 | 17 | Services | BYO model and Composio keys in Phase 1. Managed services (LLM router, Brave, Composio, Perflo) in Phase 2. |
 | 18 | Integrations | Headless browser in Phase 1. Desktop, app integrations, messaging channels in Phase 2. |
 | 19 | Tooling | TypeScript SDK in Phase 1. Python SDK, starter kit, white-label, outside agent loops in Phase 2. |
+| 20 | Weekend 1 harness (Nov 12) | fx (Vercel Labs coding agent, https://github.com/vercel-labs/fx) instead of Claude Code, to keep model cost low. Claude Code moves later. fx joins the harness list. |
+| 21 | Model access (Nov 12) | Vercel AI Gateway, one key (`AI_GATEWAY_API_KEY`). Default model `deepseek/deepseek-v4.1-flash`, set by config, overridable per request. The key reaches the sandbox only through `sbx secret set-custom` (the VM sees a placeholder). |
+| 22 | Stack (Nov 12) | Node 24 (runs `.ts` directly), Hono 4 + `@hono/node-server`, zod 4, TypeScript 7 (`tsc --noEmit`), Vitest 5, ESLint + Prettier. State in memory until a store is needed. |
+| 23 | Base distro (Nov 12) | Ubuntu (the `sbx` `shell` image). Alpine is a later measured experiment. |
 
 ---
 
@@ -157,6 +161,7 @@ Any state -> `failed`. `deleting -> deleted`.
 
 | Template | Phase | Contents |
 |---|---|---|
+| `fx` | 1 | `shell` sandbox + fx 0.0.16 in `/usr/local/bin` + `templates/fx/` (gateway relay, `fx-turn.sh`), saved as `sbx` template `agent-sandbox-fx:0.0.16`. Rebuild with `scripts/build-fx-template.ts`. Adapter runs `fx ask --json`; streaming later through ACP (`fx acp`). |
 | `claude-code` | 1 | Claude Code + adapter shim (stream-json output -> 9 events). |
 | `pi` | 1 | Pi coding agent + adapter shim. |
 | `eve` | 1 | eve runtime. The user sends an eve agent project; the shim runs it and maps eve events to the 9 events. |
@@ -170,7 +175,7 @@ Any state -> `failed`. `deleting -> deleted`.
 
 | When | Target |
 |---|---|
-| Weekend 1 | `sbx` on Windows driven from Node: create, exec, delete. Claude Code template. `/v1/responses` non-streaming. Repo public with README, AGENTS.md, this spec. |
+| Weekend 1 | `sbx` on Windows driven from Node: create, exec, delete. Sandbox API (`/v1/instances`, exec, stop, start) on the `base` template. fx template. `/v1/responses` non-streaming on fx. Demo: Agent37's "first agent message" and a hello.py turn. Repo public with README, AGENTS.md, this spec. |
 | **Weekend 2 - checkpoint** | **One template passes acceptance steps 1-5.** If not: decide to continue, switch to Docker + gVisor, or stop. |
 | Weekend 3 | Pi and eve adapters. Fork, sleep and wake, public ports. Keys and meter. |
 | Weekend 4 | All three templates pass the full acceptance script. First cloud experiment (KVM check on Hetzner and DigitalOcean). |
@@ -215,6 +220,27 @@ Installed on Satish's laptop: `sbx version v0.50.1`. These are read from `sbx --
 | Agent turns | `sbx exec SANDBOX <harness command>`. Claude Code: `claude -p ... --output-format stream-json`. | Adapter runs the harness non-interactively through exec. Test. |
 | Hosted option | `--cloud` dispatches to Docker Cloud Sandboxes (cloud `stop` suspends memory + disk; billable sizes; TTL). | Docker sells the hosted layer itself. Treat as one more `HostProvider` and as a comparison point. |
 
+### Tested by running (sbx v0.50.1, Windows 11, Nov 12, 2026)
+
+| Test | Result |
+|---|---|
+| `sbx create shell --name X --no-progress` (no workspace path) | 7.8 s. Ubuntu 26.04.1, kernel 7.0.14, user `agent`, `HOME=/home/agent`, cwd `/home/agent/workspace`. 20 GB root overlay; a fresh sandbox uses 46 MB. Node, Python 3, git, curl preinstalled. |
+| `sbx ls --json` | JSON array. Fields: `name`, `id` (UUID), `agent`, `status` (`running`, `stopped`), `last_used_at`, `created_at`, `workspaces` (only when a path was given). |
+| `sbx exec X cmd` | 0.4 s on a running sandbox. Returns the command's exit status (`exit 7` gives 7). |
+| Exec of a command missing inside the VM | Exit 127 plus `OCI runtime exec failed: ...` on stderr. Not 125. |
+| Exec on a sandbox that does not exist | Exit 125, `Error: sandbox 'X' not found`. |
+| Exec on a stopped sandbox | Starts it first (2.2-2.8 s total). The `sandbox X - started` line goes to stderr; stdout holds only the command output. |
+| Start a stopped local sandbox | There is no local `sbx start` command. Start = `sbx exec X true`. |
+| `sbx create` output | No `--json` flag. Look the sandbox up by name with `sbx ls --json` afterwards. |
+| File written to `/home/agent`, then `stop`, then exec | File is still there. `stop` 0.8 s, `rm --force` 1.0 s. |
+| Git Bash on Windows | Rewrites `/opt/...` style arguments to Windows paths before `sbx` sees them. Use `MSYS_NO_PATHCONV=1` in Git Bash. Node `spawn` is not affected. |
+| Sandbox network | Every sandbox has `HTTPS_PROXY=http://gateway.docker.internal:3128` and the proxy CA installed. Direct outbound HTTPS (not through the proxy) also works under the default policy. |
+| `sbx secret set-custom --sandbox X --placeholder P` | Proxy swaps placeholder `P` for the real key on requests to `--host`, only for clients that use the proxy (curl: yes). Setting it on an existing sandbox does not set the env var inside; pass `--env NAME=P` on exec. `sbx rm X` deletes the sandbox-scoped secret. |
+| fx 0.0.16 and the proxy | fx (Zig binary) ignores `HTTPS_PROXY` and connects directly, so the key swap does not happen (HTTP 401). Fix: undocumented `FX_GATEWAY_BASE_URL` + `FX_GATEWAY_CHAT_URL` point fx at a relay on `127.0.0.1:8787` inside the VM (`templates/fx/gateway-relay.mjs`, Node fetch with `NODE_USE_ENV_PROXY=1`), which goes through the proxy. Verified: the real key is not in the VM env or files. |
+| `sbx template save X TAG` | On a running sandbox it asks for confirmation and fails without a TTY (the `--force` it suggests does not exist). On a stopped sandbox it saves without asking: 4.2 s. |
+| `sbx create shell --template TAG --pull never` | 4.5 s from the saved fx template (faster than the 7.8 s base create). First fx turn on it: 3.0 s. |
+| `{id}.localhost` on Windows | curl and browsers resolve it to 127.0.0.1. Node `dns.lookup` and `fetch` do not (ENOTFOUND); Node clients must send the `Host` header. |
+
 ### Still open (answer by running code)
 
 | # | Question | How to answer |
@@ -241,7 +267,7 @@ Installed on Satish's laptop: `sbx version v0.50.1`. These are read from `sbx --
 
 ## 10. Docs in this repo
 
-`README.md`, `AGENTS.md` (for coding agents), `docs/SPEC.md` (this file), `docs/PRD.md` (product view of this spec), `docs/TESTING.md` (section 7 as a checklist; becomes an executable script). Linting config instead of a style doc. `docs/ARCHITECTURE.md` after weekend 2.
+`README.md`, `AGENTS.md` (for coding agents), `docs/SPEC.md` (this file), `docs/PRD.md` (product view of this spec), `docs/TESTING.md` (section 7 as a checklist; becomes an executable script). Linting config instead of a style doc. `docs/ARCHITECTURE.md` (components, request flows, adapters; started Nov 12, updated as code lands).
 
 ---
 

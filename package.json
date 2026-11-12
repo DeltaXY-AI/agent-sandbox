@@ -1,0 +1,45 @@
+{
+  "name": "agent-sandbox",
+  "version": "0.0.1",
+  "description": "Run AI agents in Docker Sandboxes microVMs behind one HTTP API",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "typecheck": "tsc",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run lint && npm test",
+    "start": "node --env-file=.env src/server.ts",
+    "smoke": "node scripts/sbx-smoke.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DeltaXY-AI/agent-sandbox.git"
+  },
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/DeltaXY-AI/agent-sandbox/issues"
+  },
+  "homepage": "https://github.com/DeltaXY-AI/agent-sandbox#readme",
+  "private": "true",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.7",
+    "hono": "^4.13.18",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.6",
+    "eslint": "^10.14.0",
+    "prettier": "^3.10.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.2",
+    "vitest": "^5.1.0"
+  }
+}

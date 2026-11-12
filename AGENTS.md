@@ -8,7 +8,7 @@ A TypeScript platform that runs AI agents in Docker Sandboxes microVMs behind on
 
 ## Status
 
-Spec only. No code yet. Weekend 1 starts with the tasks in "First tasks" below.
+Weekend 1 done (Nov 12, 2026): Sandbox API (`base` template) and non-streaming `/v1/responses` on the `fx` template, routed by `{id}.localhost`. Not yet built: streaming, files API, public ports, fork, sleep/wake timer, metering.
 
 ## Rules
 
@@ -23,7 +23,19 @@ Spec only. No code yet. Weekend 1 starts with the tasks in "First tasks" below.
 
 ## Commands
 
-To be added in weekend 1 (install, build, test, run). Expected stack: Node 22+, TypeScript, a test runner, ESLint + Prettier.
+Node 24 runs the `.ts` files directly; there is no build step. Secrets go in `.env` (git-ignored): `AGENT_SANDBOX_API_KEY`, `AI_GATEWAY_API_KEY`.
+
+| Command | What it does |
+|---|---|
+| `npm install` | Install dependencies. |
+| `npm run check` | Typecheck (`tsc`), lint, unit tests. Run before reporting work as done. |
+| `npm start` | Control plane on `http://localhost:3000`. |
+| `node scripts/build-fx-template.ts` | Build the `fx` sbx template (needed once, and after changing `templates/fx/`). |
+| `npm run smoke` | Drive `sbx` from Node: create, exec, stop, auto-start, delete. |
+| `node --env-file=.env scripts/demo-sandbox-api.ts` | Sandbox API demo (server must be running). |
+| `node --env-file=.env scripts/demo-agent.ts` | Agent demo on fx: first message, follow-up, hello.py (server must be running; costs a few model tokens). |
+
+In Git Bash, set `MSYS_NO_PATHCONV=1` before passing Linux paths to `sbx`.
 
 ## Layout (planned)
 
