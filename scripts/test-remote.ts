@@ -33,14 +33,15 @@ function check(label: string, ok: boolean, detail = "") {
   console.log(`${ok ? "PASS" : "FAIL"}  ${label}${detail ? `  (${detail})` : ""}`);
 }
 
-/** Run one command on the server over SSH. */
-function ssh(command: string): Promise<{ code: number; out: string }> {
+/** Run one command on the server over SSH. Only stdout is parsed; ssh's own notices go to stderr. */
+function ssh(command: string): Promise<{ code: number; out: string; err: string }> {
   return new Promise((resolve) => {
     const child = spawn("ssh", [...sshBase, target, command], { windowsHide: true });
     let out = "";
+    let err = "";
     child.stdout.on("data", (c) => (out += c));
-    child.stderr.on("data", (c) => (out += c));
-    child.on("close", (code) => resolve({ code: code ?? -1, out: out.trim() }));
+    child.stderr.on("data", (c) => (err += c));
+    child.on("close", (code) => resolve({ code: code ?? -1, out: out.trim(), err: err.trim() }));
   });
 }
 
@@ -113,7 +114,8 @@ async function waitFor(id: string, status: string, timeoutMs = 120_000) {
 // 1. Server side: services and sbx.
 console.log(`== server ${target}`);
 const services = await ssh("systemctl is-active sbx-daemon agent-sandbox; sbx version");
-check("ssh reachable", services.code === 0 || services.out.length > 0, services.out.split("\n")[0]);
+// `systemctl is-active` exits non-zero when a unit is down, so judge reachability by output.
+check("ssh reachable", services.out.length > 0, services.out ? "" : services.err.slice(0, 200));
 const lines = services.out.split("\n");
 check("sbx-daemon service active", lines[0] === "active", lines[0]);
 check("agent-sandbox service active", lines[1] === "active", lines[1]);
