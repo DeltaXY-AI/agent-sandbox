@@ -1,7 +1,7 @@
-// Acceptance: docs/TESTING.md steps 1-6 and 8 on one template (weekend 2 checkpoint,
-// public ports, sleep and wake), against a running server.
+// Acceptance: docs/TESTING.md steps 1-6, 8 and 9 on one template (weekend 2 checkpoint,
+// public ports, workspaces and isolation, sleep and wake), against a running server.
 // Run:  node --env-file=.env test/acceptance/checkpoint.ts            (template fx, port 3000)
-// Env:  TEMPLATE (default fx), PORT (default 3000), AGENT_SANDBOX_API_KEY
+// Env:  TEMPLATE (default fx), PORT (default 3000), AGENT_SANDBOX_API_KEY, AGENT_SANDBOX_ADMIN_KEY
 // Costs a few model tokens. Prints PASS/FAIL per check; exit code 1 if any check fails.
 import { request } from "node:http";
 import { EVENT_NAMES } from "../../src/events/types.ts";
@@ -312,6 +312,65 @@ try {
     authorization: `Bearer ${key}`,
   });
   check("a port nothing listens on -> 502", nothing.status === 502, `got ${nothing.status}`);
+
+  // Step 9: a second workspace cannot read the first one's sandbox, by key or by network.
+  console.log("\n== step 9: workspaces and isolation");
+  const adminKey = process.env.AGENT_SANDBOX_ADMIN_KEY;
+  if (!adminKey) {
+    check("AGENT_SANDBOX_ADMIN_KEY is set (needed to create a second workspace)", false);
+  } else {
+    const wsB = await call(
+      "POST",
+      "localhost",
+      "/v1/admin/workspaces",
+      { authorization: `Bearer ${adminKey}` },
+      { name: `acceptance-b-${Date.now()}` },
+    );
+    const keyB = JSON.parse(wsB.text || "{}").api_key?.key as string;
+    check("admin API creates workspace B with its own key", wsB.status === 201 && Boolean(keyB));
+    const asB = { authorization: `Bearer ${keyB}` };
+    const readA = await call("POST", "localhost", `/v1/instances/${id}/exec`, asB, {
+      command: "cat /home/agent/hello.py",
+    });
+    check("B's key cannot exec in A's sandbox -> 404", readA.status === 404, `got ${readA.status}`);
+    const listB = JSON.parse((await call("GET", "localhost", "/v1/instances", asB)).text || "{}");
+    check(
+      "B's key lists none of A's instances",
+      Array.isArray(listB.data) && listB.data.length === 0,
+    );
+    const previewB = await call("GET", previewHost, "/hello.py", asB);
+    check("B's key on A's preview URL -> 404", previewB.status === 404, `got ${previewB.status}`);
+
+    // Network: from B's own sandbox, try A directly and the host's loopback (where every
+    // published port and the control plane listen).
+    const ipA = (
+      await api("POST", `/v1/instances/${id}/exec`, { command: "hostname -I | cut -d' ' -f1" })
+    ).json?.stdout?.trim();
+    const createdB = await call("POST", "localhost", "/v1/instances", asB, { template: "base" });
+    const idB = JSON.parse(createdB.text || "{}").id as string;
+    try {
+      for (let t = Date.now(); Date.now() - t < 120_000;) {
+        const s = JSON.parse((await call("GET", "localhost", `/v1/instances/${idB}`, asB)).text);
+        if (s.status === "running") break;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      const probe = await call("POST", "localhost", `/v1/instances/${idB}/exec`, asB, {
+        command:
+          `for u in http://${ipA}:8080/hello.py http://host.docker.internal:${PORT}/v1/instances ` +
+          `http://localhost:${PORT}/v1/instances; do ` +
+          `printf '%s ' "$u"; curl -s -m 5 -o /dev/null -w '%{http_code}\\n' "$u"; done`,
+      });
+      const lines: string[] = (JSON.parse(probe.text || "{}").stdout ?? "").trim().split("\n");
+      const reached = lines.filter((l) => / (200|401|404)$/.test(l));
+      check(
+        "B's sandbox cannot reach A's sandbox or the host loopback",
+        lines.length === 3 && reached.length === 0,
+        lines.map((l) => l.replace(/^http:\/\//, "")).join("; "),
+      );
+    } finally {
+      if (idB) await call("DELETE", "localhost", `/v1/instances/${idB}`, asB);
+    }
+  }
 
   // Step 8: sleep, send a message, it wakes and the session continues.
   // Also answers SPEC open question 1: do installed files and the harness's own

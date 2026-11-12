@@ -9,6 +9,7 @@ import type {
   SandboxSpec,
 } from "../src/hosts/types.ts";
 import { InstanceService, type InstanceServiceOptions } from "../src/instances/service.ts";
+import { Store } from "../src/store/store.ts";
 
 class FakeHost implements HostProvider {
   readonly name = "fake";
@@ -84,9 +85,15 @@ function setup(options: InstanceServiceOptions = {}) {
     },
   };
   const host = new FakeHost();
-  const instances = new InstanceService(host, "sb-", (id) => `http://${id}.localhost`, options);
+  const store = new Store(":memory:");
+  store.bootstrapDefault("k");
+  const instances = new InstanceService(host, "sb-", (id) => `http://${id}.localhost`, {
+    records: store,
+    ...options,
+  });
   const app = buildApp({
-    apiKey: "k",
+    store,
+    adminKey: "admin",
     instances,
     templates: ["base", "fx"],
     harnesses: { fx: harness },
@@ -97,6 +104,7 @@ function setup(options: InstanceServiceOptions = {}) {
   return {
     app,
     host,
+    store,
     instances,
     seen,
     blockNext: () => (block = true),
@@ -456,6 +464,109 @@ describe("Sleep and wake", () => {
     ).json()) as { idle_timeout_seconds: number; last_active_at: string };
     expect(created.idle_timeout_seconds).toBe(900);
     expect(created.last_active_at).toMatch(/^\d{4}-/);
+  });
+});
+
+describe("Workspaces and keys", () => {
+  const json = (key: string, method = "GET", body?: unknown) => ({
+    method,
+    headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+
+  /** Workspace B through the admin API; returns its first key. */
+  async function workspaceB(app: ReturnType<typeof setup>["app"]) {
+    const res = await app.request("/v1/admin/workspaces", json("admin", "POST", { name: "b" }));
+    expect(res.status).toBe(201);
+    return (await res.json()) as {
+      workspace: { id: string };
+      api_key: { id: string; key: string; prefix: string };
+    };
+  }
+
+  it("admin API: only the admin key, creates workspaces with a key shown once", async () => {
+    const { app } = setup();
+    expect((await app.request("/v1/admin/workspaces", json("k"))).status).toBe(401);
+    expect((await app.request("/v1/admin/workspaces")).status).toBe(401);
+    const b = await workspaceB(app);
+    expect(b.api_key.key).toMatch(/^sk_live_/);
+    const detail = (await (
+      await app.request(`/v1/admin/workspaces/${b.workspace.id}`, json("admin"))
+    ).json()) as { name: string; api_keys: Record<string, unknown>[] };
+    expect(detail.name).toBe("b");
+    expect(detail.api_keys).toHaveLength(1);
+    expect(detail.api_keys[0]).not.toHaveProperty("key");
+    const list = (await (await app.request("/v1/admin/workspaces", json("admin"))).json()) as {
+      data: { id: string }[];
+    };
+    expect(list.data.map((w) => w.id)).toEqual(["ws_default", b.workspace.id]);
+  });
+
+  it("a key from another workspace gets 404 on this workspace's instances (step 9)", async () => {
+    const ctx = setup();
+    const a = await createRunning(ctx.app); // default workspace, key "k"
+    const b = await workspaceB(ctx.app);
+    const bKey = b.api_key.key;
+
+    expect(
+      (
+        (await (await ctx.app.request("/v1/instances", json(bKey))).json()) as {
+          data: unknown[];
+        }
+      ).data,
+    ).toEqual([]);
+    for (const [path, method, body] of [
+      [`/v1/instances/${a.id}`, "GET", undefined],
+      [`/v1/instances/${a.id}/exec`, "POST", { command: "cat /home/agent/hello.py" }],
+      [`/v1/instances/${a.id}/stop`, "POST", undefined],
+      [`/v1/instances/${a.id}/public-ports`, "POST", { port: 8080 }],
+      [`/v1/instances/${a.id}/signed-url`, "POST", { port: 8080 }],
+    ] as const) {
+      const res = await ctx.app.request(path, json(bKey, method, body));
+      expect(res.status, `${method} ${path}`).toBe(404);
+    }
+    const del = await ctx.app.request(`/v1/instances/${a.id}`, json(bKey, "DELETE"));
+    expect(del.status).toBe(404);
+    // Preview URLs too, even before checking a credential of the right workspace.
+    const preview = await ctx.app.fetch(
+      new Request(`http://${a.id}-8080.localhost/`, {
+        headers: { host: `${a.id}-8080.localhost`, authorization: `Bearer ${bKey}` },
+      }),
+    );
+    expect(preview.status).toBe(404);
+
+    // B's own instance works with B's key and is invisible to the default workspace.
+    const mine = (await (
+      await ctx.app.request("/v1/instances", json(bKey, "POST", { template: "fx" }))
+    ).json()) as { id: string; workspace_id: string };
+    expect(mine.workspace_id).toBe(b.workspace.id);
+    expect((await ctx.app.request(`/v1/instances/${mine.id}`, json("k"))).status).toBe(404);
+  });
+
+  it("a revoked key stops working at once", async () => {
+    const { app } = setup();
+    const b = await workspaceB(app);
+    expect((await app.request("/v1/instances", json(b.api_key.key))).status).toBe(200);
+    const revoked = await app.request(
+      `/v1/admin/workspaces/${b.workspace.id}/keys/${b.api_key.id}`,
+      json("admin", "DELETE"),
+    );
+    expect(await revoked.json()).toEqual({ id: b.api_key.id, revoked: true });
+    expect((await app.request("/v1/instances", json(b.api_key.key))).status).toBe(401);
+  });
+
+  it("after a restart, instances come back with their owner and agent key", async () => {
+    const ctx = setup();
+    const inst = await createRunning(ctx.app);
+    const again = new InstanceService(ctx.host, "sb-", (id) => `http://${id}.localhost`, {
+      records: ctx.store,
+    });
+    expect(await again.adoptExisting()).toBe(1);
+    expect(again.get(inst.id)).toMatchObject({
+      workspace_id: "ws_default",
+      template: "fx",
+      agent_key: inst.agent_key,
+    });
   });
 });
 

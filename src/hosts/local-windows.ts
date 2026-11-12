@@ -3,6 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   createSandbox,
+  denyNetwork,
   execInSandbox,
   holdOpen,
   listPorts,
@@ -16,6 +17,9 @@ import {
 } from "../lib/sbx.ts";
 import { FX_TEMPLATE_TAG } from "../templates.ts";
 import type { ExecRequest, ExecResult, HostProvider, HostSandbox, SandboxSpec } from "./types.ts";
+
+/** How a sandbox could reach the host's loopback through the sbx proxy. */
+const HOST_LOOPBACK = ["host.docker.internal", "localhost", "127.0.0.0/8"];
 
 /** Platform template -> how sbx creates it. */
 const TEMPLATES: Record<string, { agent: string; image?: string }> = {
@@ -99,6 +103,10 @@ export class LocalWindowsHost implements HostProvider {
     });
     try {
       for (const s of secrets) await setCustomSecret(spec.name, s);
+      // The sbx proxy maps host.docker.internal to the host's loopback, where every
+      // sandbox's published ports and the control plane listen. Block it, so sandboxes
+      // cannot reach each other or us (SPEC section 8). Fail closed if this fails.
+      await denyNetwork(spec.name, HOST_LOOPBACK);
     } catch (err) {
       await removeSandbox(spec.name).catch(() => undefined);
       throw err;

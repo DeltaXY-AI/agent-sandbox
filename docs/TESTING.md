@@ -34,3 +34,5 @@ Steps 1-5 pass on at least one template. If not, decide: continue, switch to Doc
 **Step 8 passes on fx, Nov 12, 2026:** sleep, then a follow-up turn wakes the sandbox (6.0 s including the turn) and the reply names `hello.py` from the earlier turn. Local Windows host, sbx v0.50.1. Part of `npm run acceptance` (23 checks).
 
 **Step 6 passes on fx, Nov 12, 2026:** the agent starts `python3 -m http.server 8080`; the preview URL serves `hello.py` with the API key and with a signed URL (no key, cookie set), 401 without a credential, the public port URL serves it with no credential, and a port nothing listens on gives 502. `npm run acceptance`: 30 checks.
+
+**Step 9 passes on fx, Nov 12, 2026:** workspace B (made with the admin API) gets 404 for exec, listing and the preview URL of workspace A's sandbox. From B's sandbox, A's IP is unreachable, `host.docker.internal:<control plane port>` answers 403 (blocked by the per-sandbox deny rule) and `localhost` is unreachable. `npm run acceptance`: 35 checks.

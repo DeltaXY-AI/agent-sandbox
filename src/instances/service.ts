@@ -6,6 +6,7 @@
 // stays off until start() (decision: sleeping wakes itself, stopped does not).
 import { randomBytes } from "node:crypto";
 import type { ExecRequest, ExecResult, HostProvider, SandboxSecret } from "../hosts/types.ts";
+import type { InstanceRecord } from "../store/store.ts";
 
 export type InstanceStatus =
   | "provisioning"
@@ -20,6 +21,8 @@ export type InstanceStatus =
 
 export interface Instance {
   id: string;
+  /** Owner. Other workspaces' keys get 404 for this instance. */
+  workspace_id: string;
   template: string;
   status: InstanceStatus;
   created_at: string;
@@ -36,6 +39,7 @@ export interface Instance {
 }
 
 export interface CreateInstanceInput {
+  workspace_id: string;
   template: string;
   env?: Record<string, string>;
   metadata?: Record<string, string>;
@@ -65,6 +69,14 @@ export interface InstanceServiceOptions {
   now?: () => number;
   /** How long a request waits for a sleeping instance to wake (Agent37: 503 wake_timeout). */
   wakeTimeoutMs?: number;
+  /** Durable instance records (owner, agent key, settings). In memory only when absent. */
+  records?: {
+    saveInstance(r: InstanceRecord): void;
+    deleteInstance(id: string): void;
+    loadInstances(): InstanceRecord[];
+  };
+  /** Owner for sandboxes found on the host with no record. */
+  defaultWorkspaceId?: string;
 }
 
 export class InstanceService {
@@ -78,6 +90,8 @@ export class InstanceService {
   private readonly urlFor: (id: string) => string;
   private readonly clock: () => number;
   private readonly wakeTimeoutMs: number;
+  private readonly records: InstanceServiceOptions["records"];
+  private readonly defaultWorkspaceId: string;
 
   constructor(
     host: HostProvider,
@@ -90,20 +104,42 @@ export class InstanceService {
     this.urlFor = urlFor;
     this.clock = options.now ?? Date.now;
     this.wakeTimeoutMs = options.wakeTimeoutMs ?? 3 * 60_000;
+    this.records = options.records;
+    this.defaultWorkspaceId = options.defaultWorkspaceId ?? "ws_default";
   }
 
   private iso(): string {
     return new Date(this.clock()).toISOString();
   }
 
-  /** Adopt sandboxes this platform created before a restart. Template is not recoverable yet. */
+  /**
+   * Adopt sandboxes this platform created before a restart. With a stored record the
+   * instance comes back whole (owner, template, agent key); records whose sandbox is
+   * gone are dropped. A sandbox with no record joins the default workspace, keyless.
+   */
   async adoptExisting(): Promise<number> {
     const sandboxes = await this.host.list();
+    const records = new Map((this.records?.loadInstances() ?? []).map((r) => [r.id, r]));
+    const onHost = new Set(sandboxes.map((s) => s.name));
+    for (const id of records.keys()) if (!onHost.has(id)) this.records?.deleteInstance(id);
     let adopted = 0;
     for (const s of sandboxes) {
       if (!s.name.startsWith(this.prefix) || this.instances.has(s.name)) continue;
+      const record = records.get(s.name);
+      if (record) {
+        this.instances.set(s.name, {
+          ...record,
+          status: s.status === "running" ? "running" : "sleeping",
+          updated_at: this.iso(),
+          last_active_at: this.iso(),
+          url: this.urlFor(s.name),
+        });
+        adopted++;
+        continue;
+      }
       this.instances.set(s.name, {
         id: s.name,
+        workspace_id: this.defaultWorkspaceId,
         template: "unknown",
         status: s.status === "running" ? "running" : "sleeping",
         created_at: s.createdAt,
@@ -122,6 +158,7 @@ export class InstanceService {
     const id = `${this.prefix}${randomBytes(5).toString("hex")}`;
     const instance: Instance = {
       id,
+      workspace_id: input.workspace_id,
       template: input.template,
       status: "provisioning",
       created_at: this.iso(),
@@ -133,6 +170,15 @@ export class InstanceService {
       agent_key: `ak_${randomBytes(24).toString("hex")}`,
     };
     this.instances.set(id, instance);
+    this.records?.saveInstance({
+      id,
+      workspace_id: instance.workspace_id,
+      template: instance.template,
+      agent_key: instance.agent_key ?? "",
+      idle_timeout_seconds: instance.idle_timeout_seconds,
+      metadata: instance.metadata,
+      created_at: instance.created_at,
+    });
     // Creation takes several seconds; the client polls GET /v1/instances/{id}.
     void this.host
       .createSandbox({
@@ -153,8 +199,20 @@ export class InstanceService {
     return { ...instance };
   }
 
-  list(): Instance[] {
-    return [...this.instances.values()].map((i) => ({ ...i }));
+  /** All instances, or only one workspace's. */
+  list(workspaceId?: string): Instance[] {
+    return [...this.instances.values()]
+      .filter((i) => workspaceId === undefined || i.workspace_id === workspaceId)
+      .map((i) => ({ ...i }));
+  }
+
+  /** get() for a caller in a workspace: another workspace's instance is 404, not 403. */
+  owned(id: string, workspaceId: string): Instance {
+    const instance = this.instances.get(id);
+    if (!instance || instance.workspace_id !== workspaceId) {
+      throw new ApiError(404, "instance_not_found", `No instance ${id}`);
+    }
+    return { ...instance };
   }
 
   /**
@@ -354,6 +412,7 @@ export class InstanceService {
     }
     this.instances.delete(id);
     this.inFlight.delete(id);
+    this.records?.deleteInstance(id);
   }
 
   private async transition(id: string, action: () => Promise<void>, next: InstanceStatus) {

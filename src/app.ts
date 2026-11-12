@@ -1,11 +1,13 @@
 // Builds the HTTP app. Kept separate from server.ts so tests can call it without a socket.
-//   api host (localhost:3000)         -> Sandbox API, Authorization: Bearer <key>
+//   api host (localhost:3000)         -> Sandbox API, Authorization: Bearer <workspace key>
+//                                        /v1/admin/*: Authorization: Bearer <admin key>
 //   {id}.localhost:3000               -> Agent API for that instance, X-Agent-Key
 //   {id}-{port}.localhost:3000        -> preview URL: a port inside it (key or signed URL)
 //   {prefix}-{id} or slug .localhost  -> public port: no credential (webhooks)
 import { timingSafeEqual } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { ZodError } from "zod";
+import { adminRoutes } from "./api/admin.ts";
 import { agentApp } from "./api/agent.ts";
 import { instancesRoutes } from "./api/instances.ts";
 import type { HarnessAdapter } from "./harnesses/types.ts";
@@ -14,9 +16,13 @@ import { ApiError, type InstanceService } from "./instances/service.ts";
 import { parseHost } from "./router/hosts.ts";
 import { PublicPorts, UrlSigner } from "./router/ports.ts";
 import { portsRouter } from "./router/ports-router.ts";
+import type { Store } from "./store/store.ts";
 
 export interface AppDeps {
-  apiKey: string;
+  /** Workspaces, API keys (hashes), settings. */
+  store: Store;
+  /** Guards /v1/admin. Absent: the admin API is off. */
+  adminKey?: string;
   instances: InstanceService;
   templates: string[];
   harnesses: Record<string, HarnessAdapter>;
@@ -63,16 +69,19 @@ export function agentHostId(host: string | undefined, prefix: string): string | 
 }
 
 export function buildApp(deps: AppDeps) {
-  const app = new Hono();
+  const app = new Hono<{ Variables: { workspaceId: string } }>();
   const agent = agentApp(deps);
   agent.onError(handleError);
   agent.notFound((c) => c.json({ error: { code: "not_found", message: "No such route" } }, 404));
 
   const hostUrl = deps.hostUrl ?? ((label: string) => `http://${label}.localhost`);
   const publicPorts = new PublicPorts();
-  const signer = new UrlSigner(deps.apiKey);
+  const signer = new UrlSigner(deps.store.secret("signed_url_key"));
+  /** The workspace an API key belongs to, or undefined for unknown or revoked keys. */
+  const workspaceOf = (key: string | undefined) =>
+    key ? deps.store.findKey(key)?.workspace_id : undefined;
   const ports = portsRouter({
-    apiKey: deps.apiKey,
+    workspaceOf,
     instances: deps.instances,
     publicPorts,
     signer,
@@ -90,15 +99,36 @@ export function buildApp(deps: AppDeps) {
     return next();
   });
 
-  app.use("/v1/*", async (c, next) => {
+  const bearer = (c: Context) => {
     const header = c.req.header("authorization") ?? "";
-    const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-    if (!sameKey(token, deps.apiKey)) {
+    return header.startsWith("Bearer ") ? header.slice(7) : "";
+  };
+
+  // Admin API: the admin key only. Workspace keys never reach it.
+  app.use("/v1/admin/*", async (c, next) => {
+    if (!deps.adminKey) {
+      return c.json({ error: { code: "not_found", message: "The admin API is off" } }, 404);
+    }
+    if (!sameKey(bearer(c), deps.adminKey)) {
+      return c.json(
+        { error: { code: "unauthorized", message: "Missing or invalid admin key" } },
+        401,
+      );
+    }
+    await next();
+  });
+  app.route("/v1/admin", adminRoutes(deps.store));
+
+  // Sandbox API: a workspace key; the routes act within that workspace only.
+  app.use("/v1/*", async (c, next) => {
+    const workspaceId = workspaceOf(bearer(c));
+    if (!workspaceId) {
       return c.json(
         { error: { code: "unauthorized", message: "Missing or invalid API key" } },
         401,
       );
     }
+    c.set("workspaceId", workspaceId);
     await next();
   });
 

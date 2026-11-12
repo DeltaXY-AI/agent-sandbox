@@ -8,7 +8,8 @@ import { TOKEN_PARAM, type PublicPorts, type UrlSigner } from "./ports.ts";
 import { proxyRequest, UpstreamUnavailable } from "./proxy.ts";
 
 export interface PortsRouterDeps {
-  apiKey: string;
+  /** The workspace an API key belongs to (undefined: unknown or revoked). */
+  workspaceOf: (key: string | undefined) => string | undefined;
   instances: InstanceService;
   publicPorts: PublicPorts;
   signer: UrlSigner;
@@ -63,7 +64,7 @@ export function portsRouter(deps: PortsRouterDeps) {
     }
   }
 
-  /** Preview URL: needs the API key, the instance's agent key, or a signed-URL token. */
+  /** Preview URL: needs the owning workspace's API key, the agent key, or a signed URL. */
   async function preview(req: Request, instanceId: string, port: number): Promise<Response> {
     let instance;
     try {
@@ -71,11 +72,19 @@ export function portsRouter(deps: PortsRouterDeps) {
     } catch {
       return json(404, "instance_not_found", `No instance ${instanceId}`);
     }
+    // Another workspace's key: 404, as on the Sandbox API (Agent37).
+    const keyWorkspace = deps.workspaceOf(
+      req.headers.get("authorization")?.replace(/^Bearer /, ""),
+    );
+    if (keyWorkspace && keyWorkspace !== instance.workspace_id) {
+      return json(404, "instance_not_found", `No instance ${instanceId}`);
+    }
     const bearer = req.headers.get("authorization")?.replace(/^Bearer /, "");
     const queryToken = new URL(req.url).searchParams.get(TOKEN_PARAM);
     const token = queryToken ?? cookieValue(req, TOKEN_PARAM);
+    const ownerKey = deps.workspaceOf(bearer) === instance.workspace_id;
     const allowed =
-      sameKey(bearer, deps.apiKey) ||
+      ownerKey ||
       sameKey(req.headers.get("x-agent-key"), instance.agent_key) ||
       (token !== undefined && deps.signer.verify(token, instanceId, port));
     if (!allowed) {
@@ -83,7 +92,7 @@ export function portsRouter(deps: PortsRouterDeps) {
     }
     // Our credentials never reach the sandbox; the app may use Authorization itself.
     const drop = ["x-agent-key"];
-    if (sameKey(bearer, deps.apiKey)) drop.push("authorization");
+    if (ownerKey) drop.push("authorization");
     const res = await forward(req, instanceId, port, drop);
     if (queryToken) {
       // The first request turns the token into a cookie for this host, like Agent37.

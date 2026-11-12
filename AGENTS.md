@@ -10,11 +10,13 @@ A TypeScript platform that runs AI agents in Docker Sandboxes microVMs behind on
 
 Weekend 1 done (Nov 12, 2026): Sandbox API (`base` template) and non-streaming `/v1/responses` on the `fx` template, routed by `{id}.localhost`.
 
-Weekend 2 checkpoint passed on fx (Nov 12, 2026): streamed turns with the 9 SSE events, reattach with `Last-Event-ID`, files API (`GET /v1/files`, `GET /v1/files/content`). `npm run acceptance` runs TESTING.md steps 1-5. Not yet built: file writes (PUT, DELETE, PATCH, dir, archive), cancel, WebSocket proxying, fork (after the engine switch), keys and workspaces, metering, Pi/eve/Claude Code adapters.
+Weekend 2 checkpoint passed on fx (Nov 12, 2026): streamed turns with the 9 SSE events, reattach with `Last-Event-ID`, files API (`GET /v1/files`, `GET /v1/files/content`). `npm run acceptance` runs TESTING.md steps 1-5. Not yet built: file writes (PUT, DELETE, PATCH, dir, archive), cancel, WebSocket proxying, fork (after the engine switch), metering, Pi/eve/Claude Code adapters.
 
 Sleep and wake (Nov 12, 2026): `POST /v1/instances/{id}/sleep`, idle timer (`idle_timeout_seconds`, default 900), any request wakes a sleeping instance; stopped stays off until `/start`. Acceptance step 8 passes on fx.
 
 Public ports (Nov 12, 2026): preview URLs `{id}-{port}.localhost` (API key, `X-Agent-Key` or signed URL), `public_ports` (no credential), `POST /v1/instances/{id}/signed-url`. Acceptance step 6 passes on fx. WebSockets not yet proxied.
+
+Workspaces and keys (Nov 12, 2026): SQLite store (`data/agent-sandbox.db`), admin API `/v1/admin/workspaces` (admin key), `sk_live_` keys scoped to a workspace, `AGENT_SANDBOX_API_KEY` = default workspace. Every sandbox is denied the host loopback. Acceptance step 9 passes on fx.
 
 ## Rules
 
@@ -29,7 +31,7 @@ Public ports (Nov 12, 2026): preview URLs `{id}-{port}.localhost` (API key, `X-A
 
 ## Commands
 
-Node 24 runs the `.ts` files directly; there is no build step. Secrets go in `.env` (git-ignored): `AGENT_SANDBOX_API_KEY`, `AI_GATEWAY_API_KEY`.
+Node 24 runs the `.ts` files directly; there is no build step. Secrets go in `.env` (git-ignored): `AGENT_SANDBOX_API_KEY` (default workspace), `AGENT_SANDBOX_ADMIN_KEY` (admin API; optional), `AI_GATEWAY_API_KEY`. State lives in `data/agent-sandbox.db` (git-ignored; `DATABASE_PATH`).
 
 | Command | What it does |
 |---|---|
@@ -38,7 +40,7 @@ Node 24 runs the `.ts` files directly; there is no build step. Secrets go in `.e
 | `npm start` | Control plane on `http://localhost:3000`. |
 | `node scripts/build-fx-template.ts` | Build the `fx` sbx template (needed once, and after changing `templates/fx/`). |
 | `npm run smoke` | Drive `sbx` from Node: create, exec, stop, auto-start, delete. |
-| `npm run acceptance` | TESTING.md steps 1-6 and 8 against a running server: create, streamed turn, disconnect and reattach, files API, exec, public ports, sleep and wake. `TEMPLATE` (default fx), `PORT`. Costs a few model tokens. |
+| `npm run acceptance` | TESTING.md steps 1-6, 8 and 9 against a running server: create, streamed turn, disconnect and reattach, files API, exec, public ports, workspaces and isolation, sleep and wake. Step 9 needs `AGENT_SANDBOX_ADMIN_KEY`. `TEMPLATE` (default fx), `PORT`. Costs a few model tokens. |
 | `node --env-file=.env scripts/demo-sandbox-api.ts` | Sandbox API demo (server must be running). |
 | `node --env-file=.env scripts/demo-agent.ts` | Agent demo on fx: first message, follow-up, hello.py (server must be running; costs a few model tokens). |
 | `npm run deploy:do` | Immutable deploy to DigitalOcean: new droplet from `deploy/cloud-init.yaml`, push secrets over SSH, run checks, build fx, run `test-remote`, move the reserved IP, delete old droplets. On failure the new droplet is deleted. Needs a clean git tree and `DOCKER_USERNAME`, `DOCKER_PAT` in `.env`. |

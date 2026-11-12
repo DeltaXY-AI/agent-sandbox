@@ -156,6 +156,13 @@ export function holdOpen(name: string) {
   });
 }
 
+/** Block one sandbox from these network resources (hosts, CIDRs). Removed by `sbx rm`. */
+export async function denyNetwork(name: string, resources: string[]): Promise<void> {
+  for (const resource of resources) {
+    await runSbxOk(["policy", "deny", "network", "--sandbox", name, resource]);
+  }
+}
+
 export interface SbxPort {
   host_ip: string;
   host_port: number;

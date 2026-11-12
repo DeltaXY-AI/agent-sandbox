@@ -89,13 +89,13 @@ export class PublicPorts {
 
 /**
  * Signed preview URLs: `<instanceId>.<port>.<expiresEpochSeconds>.<hmac>`. Nothing is
- * stored; the HMAC key comes from the server's API key, so rotating it revokes all links.
+ * stored per link; the HMAC key is a server secret kept in the store.
  */
 export class UrlSigner {
   private readonly key: Buffer;
 
-  constructor(apiKey: string) {
-    this.key = createHmac("sha256", "agent-sandbox signed urls").update(apiKey).digest();
+  constructor(secret: string) {
+    this.key = createHmac("sha256", "agent-sandbox signed urls").update(secret).digest();
   }
 
   private mac(payload: string): string {

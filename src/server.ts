@@ -6,13 +6,20 @@ import { HARNESSES } from "./harnesses/index.ts";
 import { LocalWindowsHost } from "./hosts/local-windows.ts";
 import type { SandboxSecret } from "./hosts/types.ts";
 import { InstanceService } from "./instances/service.ts";
+import { Store } from "./store/store.ts";
 import { TEMPLATES } from "./templates.ts";
 
 const config = loadConfig();
 const host = new LocalWindowsHost();
+const store = new Store(config.databasePath);
+// The default workspace owns AGENT_SANDBOX_API_KEY, so existing clients keep working.
+const defaultWorkspace = store.bootstrapDefault(config.apiKey);
 /** Every sandbox URL is a subdomain of localhost for now: Agent API, preview URLs, public ports. */
 const hostUrl = (label: string) => `http://${label}.localhost:${config.port}`;
-const instances = new InstanceService(host, config.sandboxPrefix, hostUrl);
+const instances = new InstanceService(host, config.sandboxPrefix, hostUrl, {
+  records: store,
+  defaultWorkspaceId: defaultWorkspace.id,
+});
 
 /** The secrets a template's harness needs, with values from this process's env. */
 function secretsForTemplate(template: string): SandboxSecret[] {
@@ -32,7 +39,8 @@ const adopted = await instances.adoptExisting();
 // Every 30 s, put instances idle longer than their idle_timeout_seconds to sleep.
 instances.startIdleTimer();
 const app = buildApp({
-  apiKey: config.apiKey,
+  store,
+  adminKey: config.adminKey,
   instances,
   templates: LocalWindowsHost.templates(),
   harnesses: HARNESSES,
@@ -45,6 +53,9 @@ const app = buildApp({
 const server = serve({ fetch: app.fetch, port: config.port, hostname: "127.0.0.1" }, (info) => {
   console.log(`agent-sandbox control plane on http://localhost:${info.port} (host: ${host.name})`);
   console.log(`default model: ${config.defaultModel}`);
+  console.log(
+    `database: ${config.databasePath}; admin API ${config.adminKey ? "on" : "off (set AGENT_SANDBOX_ADMIN_KEY)"}`,
+  );
   if (adopted > 0) console.log(`adopted ${adopted} existing sandbox(es)`);
   console.log("");
   console.log("Waiting for requests. Leave this running; in another terminal try:");

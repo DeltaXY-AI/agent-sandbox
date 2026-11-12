@@ -71,7 +71,19 @@ export function instancesRoutes(
   secretsForTemplate: (template: string) => SandboxSecret[],
   ports: PortsDeps,
 ) {
-  const app = new Hono();
+  // workspaceId is set by the API-key middleware in app.ts.
+  const app = new Hono<{ Variables: { workspaceId: string } }>();
+
+  // Every /:id route acts only on the caller's own instances; others are 404.
+  const ownedOnly = async (
+    c: { req: { param(name: "id"): string }; get(key: "workspaceId"): string },
+    next: () => Promise<void>,
+  ) => {
+    service.owned(c.req.param("id"), c.get("workspaceId"));
+    await next();
+  };
+  app.use("/:id", ownedOnly);
+  app.use("/:id/*", ownedOnly);
   const showPort = (p: PublicPort) => ({
     port: p.port,
     prefix: p.prefix,
@@ -108,7 +120,7 @@ export function instancesRoutes(
         seen.add(key);
       }
     }
-    const instance = service.create({ ...rest, secrets });
+    const instance = service.create({ ...rest, secrets, workspace_id: c.get("workspaceId") });
     for (const p of wanted) ports.publicPorts.add(instance.id, p);
     return c.json(
       { ...instance, public_ports: ports.publicPorts.list(instance.id).map(showPort) },
@@ -118,11 +130,10 @@ export function instancesRoutes(
 
   app.get("/", async (c) => {
     await service.refresh();
-    return c.json({ data: service.list() });
+    return c.json({ data: service.list(c.get("workspaceId")) });
   });
 
   app.get("/:id", async (c) => {
-    service.get(c.req.param("id")); // 404 before asking the host
     await service.refresh();
     return c.json(service.get(c.req.param("id")));
   });
@@ -158,18 +169,15 @@ export function instancesRoutes(
 
   // Public ports: permanent unauthenticated URLs (Agent37 shapes).
   app.get("/:id/public-ports", (c) => {
-    service.get(c.req.param("id"));
     return c.json({ data: ports.publicPorts.list(c.req.param("id")).map(showPort) });
   });
 
   app.post("/:id/public-ports", async (c) => {
-    service.get(c.req.param("id"));
     const body = publicPortBody.parse(await c.req.json());
     return c.json(showPort(ports.publicPorts.add(c.req.param("id"), body)), 201);
   });
 
   app.delete("/:id/public-ports/:port", (c) => {
-    service.get(c.req.param("id"));
     const p = Number(c.req.param("port"));
     if (!ports.publicPorts.remove(c.req.param("id"), p)) {
       return c.json({ error: { code: "not_found", message: `Port ${p} is not public` } }, 404);
@@ -180,7 +188,6 @@ export function instancesRoutes(
   // Signed URL: a time-limited link to a preview URL that a browser can open.
   app.post("/:id/signed-url", async (c) => {
     const id = c.req.param("id");
-    service.get(id);
     const body = signedUrlBody.parse(await c.req.json());
     const ttl = Math.min(SIGNED_URL_MAX_TTL, Math.max(SIGNED_URL_MIN_TTL, body.ttl_seconds));
     const expiresAt = new Date(Date.now() + ttl * 1000);

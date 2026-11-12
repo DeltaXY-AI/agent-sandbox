@@ -40,6 +40,8 @@
 | 27 | Fork (Nov 12) | Moves after the engine switch: Firecracker snapshots (memory and disk) do it better than `sbx template save`. Acceptance step 7 waits for it. |
 | 28 | Idle timeout (Nov 12) | 15 minutes by default. |
 | 29 | Ports (Nov 12) | Agent37's model. Preview URL `{id}-{port}.<domain>` for any port, no registration, needs a credential: the API key (`Authorization: Bearer`), that instance's `X-Agent-Key`, or a signed URL. `public_ports` give permanent unauthenticated URLs (`{prefix}-{id}` or a 20-character slug) for webhooks. The bare `{id}.<domain>` stays the Agent API, so acceptance step 6 opens the preview URL. WebSockets come after step 6. |
+| 30 | Workspaces and keys (Nov 12) | Workspaces own instances; `sk_live_` API keys belong to a workspace and act only inside it (another workspace's instance is 404, as on Agent37). Another system (sign-up, billing) creates workspaces and keys through the admin API, guarded by `AGENT_SANDBOX_ADMIN_KEY`. `AGENT_SANDBOX_API_KEY` is the key of a built-in default workspace. Durable state moves to SQLite (Node's built-in `node:sqlite`, `DATABASE_PATH`, default `data/agent-sandbox.db`): workspaces, key hashes (the plain key is shown once), instance records (owner, template, agent key, settings) and server secrets. Sessions and replay buffers stay in memory. This replaces decision 22's in-memory state for these. |
+| 31 | Sandbox network isolation (Nov 12) | Every sandbox is denied `host.docker.internal`, `localhost` and `127.0.0.0/8` (per-sandbox `sbx policy deny network`), so it cannot reach other sandboxes' published ports or the control plane. Creation fails if the rules cannot be set. |
 
 ---
 
@@ -126,6 +128,8 @@ Adding a cloud means adding one HostProvider. Adding a harness means adding one 
 | POST | `/v1/instances/{id}/fork` | 1 |
 | GET/POST/DELETE | `/v1/instances/{id}/public-ports[/{port}]` (`{port, prefix?, label?}`; at most 50; `409 public_port_exists`) | 1 |
 | POST | `/v1/instances/{id}/signed-url` (`{port, ttl_seconds}`, default 3600, clamped to 60-604800; returns `{url, port, expires_at}`) | 1 |
+| POST/GET | `/v1/admin/workspaces`, `GET /v1/admin/workspaces/{id}` (admin key; create returns the first API key once) | 1 |
+| POST/DELETE | `/v1/admin/workspaces/{id}/keys[/{keyId}]` (admin key; mint a key shown once, revoke) | 1 |
 | POST | `/v1/instances/{id}/exec` | 1 |
 | GET | `/v1/instances/{id}/logs` | 1 |
 | DELETE | `/v1/instances/{id}` | 1 |
@@ -257,6 +261,7 @@ Installed on Satish's laptop: `sbx version v0.50.1`. These are read from `sbx --
 | `sbx ports --publish P --json` | Returns `[{action, host_ip: "127.0.0.1", host_port, sandbox_port, protocol: "tcp4"}]`; `sbx ports X --json` lists the same fields. Host ports are ephemeral (60000, 60001, ...). Publishing a port that is already published adds a second mapping, so check the list first. Nothing listening on the sandbox port: the host connection is reset (curl exit 56), no HTTP status. |
 | Ports across sleep | `sbx stop` drops the mappings; on the next start sbx restores them by itself on new host ports (60000 -> 60002). Never cache a host port across a wake. Processes do not survive (a server started before the stop is gone after it). |
 | Background processes from exec | `nohup python3 -m http.server 8080 &` started through `sbx exec` keeps running after that exec ends (while the sandbox stays up). |
+| Sandbox to sandbox, and to the host | Sandboxes share a network (A 172.17.0.3, B 172.17.0.5), but direct B -> A traffic is blocked. **The proxy maps `host.docker.internal` to the host's 127.0.0.1**, so B reached A's published port (`http://host.docker.internal:60009` -> 200 with A's page), bypassing our router and its keys; every loopback port on the host is reachable this way, including the control plane. Fix: per-sandbox deny rules `sbx policy deny network --sandbox X host.docker.internal`, `localhost`, `127.0.0.0/8` -> 403 "Blocked by local rule"; the internet and the model gateway still work. `sbx rm` removes the sandbox's rules. |
 
 ### Tested by running on DigitalOcean (Ubuntu 24.04 droplet, Nov 12, 2026)
 

@@ -22,6 +22,7 @@ const keepFailed = process.argv.includes("--keep-failed");
 /** Keys copied into the server's .env. Docker credentials stay on this laptop. */
 const SERVER_ENV = [
   "AGENT_SANDBOX_API_KEY",
+  "AGENT_SANDBOX_ADMIN_KEY",
   "AI_GATEWAY_API_KEY",
   "DEFAULT_MODEL",
   "SANDBOX_PREFIX",
