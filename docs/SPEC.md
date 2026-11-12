@@ -241,6 +241,21 @@ Installed on Satish's laptop: `sbx version v0.50.1`. These are read from `sbx --
 | `sbx create shell --template TAG --pull never` | 4.5 s from the saved fx template (faster than the 7.8 s base create). First fx turn on it: 3.0 s. |
 | `{id}.localhost` on Windows | curl and browsers resolve it to 127.0.0.1. Node `dns.lookup` and `fetch` do not (ENOTFOUND); Node clients must send the `Host` header. |
 
+### Tested by running on DigitalOcean (Ubuntu 24.04 droplet, Nov 12, 2026)
+
+Droplet `s-4vcpu-8gb` in `blr1`. The unchanged code, `npm run smoke`, the fx template build, both demos and `scripts/test-remote.ts` all pass.
+
+| Test | Result |
+|---|---|
+| KVM on a regular droplet | `/dev/kvm` present, VT-x exposed (`Hypervisor vendor: KVM`, `vmx` flag). Nested virtualization works on a shared-CPU droplet. |
+| Install | `curl -fsSL https://get.docker.com \| REPO_ONLY=1 sh`, then `apt-get install docker-sbx`. No Docker Engine needed. Wait for first-boot `unattended-upgrades` to release the apt lock. |
+| sbx v0.51.0 (apt default) | `shell` "now ships as a kit" from `docker.io/sbx/shell:latest`: Debian (Docker Hardened Images), **no Node**. The fx relay needs Node, so pin v0.50.1: `apt-get install docker-sbx=0.50.1-1~ubuntu.24.04~noble && apt-mark hold docker-sbx`. v0.50.1 gives the same Ubuntu 26.04.1 + Node 22 image as Windows. |
+| sbx v0.50.1 as root | Create fails with HTTP 500: `sailor: refusing to run as root` (the guest could write privileged xattrs). Run sbx as a non-root user in the `kvm` group. v0.51.0 did run as root. |
+| Sign-in | Every sbx command fails with `not signed in to Docker` until `sbx login`. On a server: `echo $PAT \| sbx login --username U --password-stdin`. No keychain on Linux, so the token is stored on disk (file permissions only). |
+| Network policy | First create fails with `global network policy has not been initialized`. `sbx policy init allow-all` matches the Windows laptop default. |
+| Daemon | `sbx daemon start` stays in the foreground. Run it as a systemd service (`User=sandbox`). |
+| Timings | First base create 61 s (image pull). After that: create about 8 s, exec 0.3-0.8 s, exec on a stopped sandbox 4.8 s, fx template build 30.5 s, first fx turn about 10 s. |
+
 ### Still open (answer by running code)
 
 | # | Question | How to answer |
@@ -249,8 +264,7 @@ Installed on Satish's laptop: `sbx version v0.50.1`. These are read from `sbx --
 | 2 | How long do `template save` and create-from-template take locally? Is fork fast enough to be useful? | Time it. |
 | 3 | Can Pi and eve run as kits? | Build a minimal kit for each. |
 | 4 | Do Docker's terms allow running local `sbx` as a hosted multi-tenant service? | Read Docker's terms before any public hosting. |
-| 5 | Do Hetzner cloud VMs or DigitalOcean droplets expose KVM for local-mode `sbx` on Linux? | Smallest VM, `ls /dev/kvm`, `sbx diagnose`. Fallback: bare metal. |
-| 6 | Does `sbx` microVM mode work on Linux at all? | Sources conflict. `sbx setup` and `sbx diagnose` on a real box. |
+| 5 | Do Hetzner cloud VMs expose KVM for local-mode `sbx` on Linux? (DigitalOcean: yes, see above.) | Smallest VM, `ls /dev/kvm`, `sbx diagnose`. Fallback: bare metal. |
 
 ---
 

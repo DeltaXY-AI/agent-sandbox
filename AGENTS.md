@@ -34,6 +34,9 @@ Node 24 runs the `.ts` files directly; there is no build step. Secrets go in `.e
 | `npm run smoke` | Drive `sbx` from Node: create, exec, stop, auto-start, delete. |
 | `node --env-file=.env scripts/demo-sandbox-api.ts` | Sandbox API demo (server must be running). |
 | `node --env-file=.env scripts/demo-agent.ts` | Agent demo on fx: first message, follow-up, hello.py (server must be running; costs a few model tokens). |
+| `npm run deploy:do` | Immutable deploy to DigitalOcean: new droplet from `deploy/cloud-init.yaml`, push secrets over SSH, run checks, build fx, run `test-remote`, move the reserved IP, delete old droplets. On failure the new droplet is deleted. Needs a clean git tree and `DOCKER_USERNAME`, `DOCKER_PAT` in `.env`. |
+| `npm run test:remote` | Test a deployed server through an SSH tunnel (set `REMOTE_HOST`; `-- --skip-agent` skips model tokens). |
+| `npm run destroy:do` | List droplets tagged `agent-sandbox` and their reserved IP; `-- --yes` deletes them. |
 
 In Git Bash, set `MSYS_NO_PATHCONV=1` before passing Linux paths to `sbx`.
 

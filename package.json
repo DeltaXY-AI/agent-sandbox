@@ -12,7 +12,10 @@
     "test": "vitest run",
     "check": "npm run typecheck && npm run lint && npm test",
     "start": "node --env-file=.env src/server.ts",
-    "smoke": "node scripts/sbx-smoke.ts"
+    "smoke": "node scripts/sbx-smoke.ts",
+    "deploy:do": "node --env-file=.env scripts/deploy-do.ts",
+    "destroy:do": "node scripts/destroy-do.ts",
+    "test:remote": "node --env-file=.env scripts/test-remote.ts"
   },
   "repository": {
     "type": "git",

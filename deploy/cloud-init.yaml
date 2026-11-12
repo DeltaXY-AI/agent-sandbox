@@ -1,0 +1,75 @@
+#cloud-config
+# First-boot recipe for an agent-sandbox host (Ubuntu 24.04, needs /dev/kvm).
+# Cloud-independent: DigitalOcean, Hetzner and others accept this file as user data.
+# No secrets here. The cloud keeps user data and the host can read it back;
+# scripts/deploy-do.ts pushes .env and the Docker token over SSH after boot.
+# Why each step: docs/SPEC.md section 8, "Tested by running on DigitalOcean".
+
+users:
+  - default
+  - name: sandbox
+    groups: [kvm]
+    shell: /bin/bash
+    lock_passwd: true
+
+write_files:
+  - path: /etc/systemd/system/sbx-daemon.service
+    content: |
+      [Unit]
+      Description=Docker Sandboxes daemon (sbx, pinned)
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      User=sandbox
+      Group=sandbox
+      SupplementaryGroups=kvm
+      Environment=HOME=/home/sandbox
+      WorkingDirectory=/home/sandbox
+      ExecStart=/usr/bin/sbx daemon start
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+  - path: /etc/systemd/system/agent-sandbox.service
+    content: |
+      [Unit]
+      Description=agent-sandbox control plane (127.0.0.1:3000)
+      After=sbx-daemon.service
+      Requires=sbx-daemon.service
+
+      [Service]
+      User=sandbox
+      Group=sandbox
+      SupplementaryGroups=kvm
+      Environment=HOME=/home/sandbox
+      WorkingDirectory=/home/sandbox/agent-sandbox
+      ExecStartPre=/bin/sleep 3
+      ExecStart=/usr/bin/node --env-file=.env src/server.ts
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - set -eux
+  - export DEBIAN_FRONTEND=noninteractive
+  # The deploy key that reaches root also reaches the sandbox user.
+  - install -d -m 700 -o sandbox -g sandbox /home/sandbox/.ssh
+  - install -m 600 -o sandbox -g sandbox /root/.ssh/authorized_keys /home/sandbox/.ssh/authorized_keys
+  # First boot runs unattended-upgrades; wait for the apt lock instead of failing.
+  - echo 'DPkg::Lock::Timeout "600";' > /etc/apt/apt.conf.d/90-lock-timeout
+  # sbx from Docker's apt repo, without Docker Engine. Pinned: 0.51.0's shell image has no Node.
+  - curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+  - REPO_ONLY=1 sh /tmp/get-docker.sh
+  - apt-get install -y -q docker-sbx=0.50.1-1~ubuntu.24.04~noble
+  - apt-mark hold docker-sbx
+  # Node 24 runs the control plane (.ts files directly).
+  - curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource.sh
+  - bash /tmp/nodesource.sh
+  - apt-get install -y -q nodejs
+  - systemctl daemon-reload
+  - systemctl enable --now sbx-daemon
+  - touch /var/lib/agent-sandbox-host-ready
