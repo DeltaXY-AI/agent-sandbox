@@ -160,14 +160,21 @@ try {
     const code = await api("POST", `/v1/instances/${id}/exec`, { command: "exit 3" });
     check("exec returns exit code 3", code.json?.exit_code === 3, `got ${code.json?.exit_code}`);
     await api("POST", `/v1/instances/${id}/exec`, { command: "echo kept > ~/note.txt" });
-    const stopped = await api("POST", `/v1/instances/${id}/stop`);
-    check("stop -> stopped", stopped.json?.status === "stopped", stopped.json?.status);
+    const slept = await api("POST", `/v1/instances/${id}/sleep`);
+    check("sleep -> sleeping", slept.json?.status === "sleeping", slept.json?.status);
     t = Date.now();
     const kept = await api("POST", `/v1/instances/${id}/exec`, { command: "cat ~/note.txt" });
     check(
-      "exec on stopped instance auto-starts; file survived",
+      "exec on sleeping instance wakes it; file survived",
       kept.json?.stdout === "kept\n",
       `${Date.now() - t} ms`,
+    );
+    await api("POST", `/v1/instances/${id}/stop`);
+    const off = await api("POST", `/v1/instances/${id}/exec`, { command: "true" });
+    check(
+      "exec on stopped instance -> 409 instance_stopped",
+      off.status === 409,
+      `got ${off.status}`,
     );
   } finally {
     const del = await api("DELETE", `/v1/instances/${id}`);

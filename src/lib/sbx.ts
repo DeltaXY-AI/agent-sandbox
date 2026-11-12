@@ -144,6 +144,18 @@ export async function stopSandbox(name: string): Promise<void> {
 }
 
 /** There is no local `sbx start`; exec starts a stopped sandbox. */
+/**
+ * Keep a sandbox from stopping by itself. sbx v0.50.1 stops a local sandbox about 30 s
+ * after its last exec ends (no setting changes this); an exec that stays open holds it up.
+ * Kill the returned process to let go. Exits by itself if the sandbox stops.
+ */
+export function holdOpen(name: string) {
+  return spawn("sbx", ["exec", name, "sleep", "infinity"], {
+    stdio: "ignore",
+    windowsHide: true,
+  });
+}
+
 export async function startSandbox(name: string): Promise<void> {
   await execInSandbox(name, ["true"]);
 }

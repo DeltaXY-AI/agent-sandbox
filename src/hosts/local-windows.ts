@@ -1,8 +1,10 @@
 // HostProvider for sbx running on this machine (developed on Windows).
+import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   createSandbox,
   execInSandbox,
+  holdOpen,
   listSandboxes,
   removeSandbox,
   setCustomSecret,
@@ -26,6 +28,28 @@ function toHostSandbox(s: SbxSandbox): HostSandbox {
 
 export class LocalWindowsHost implements HostProvider {
   readonly name = "local-windows";
+  /**
+   * One open exec per sandbox that should stay up. sbx stops an idle sandbox after about
+   * 30 s by itself; the platform's own idle timer decides when to sleep instead.
+   */
+  private readonly holds = new Map<string, ChildProcess>();
+
+  private keepAwake(name: string): void {
+    if (this.holds.has(name)) return;
+    const child = holdOpen(name);
+    this.holds.set(name, child);
+    const forget = () => {
+      if (this.holds.get(name) === child) this.holds.delete(name);
+    };
+    child.on("exit", forget);
+    child.on("error", forget);
+  }
+
+  private letGo(name: string): void {
+    const child = this.holds.get(name);
+    this.holds.delete(name);
+    child?.kill();
+  }
 
   static templates(): string[] {
     return Object.keys(TEMPLATES);
@@ -55,6 +79,7 @@ export class LocalWindowsHost implements HostProvider {
       await removeSandbox(spec.name).catch(() => undefined);
       throw err;
     }
+    this.keepAwake(spec.name);
     return toHostSandbox(sandbox);
   }
 
@@ -63,6 +88,8 @@ export class LocalWindowsHost implements HostProvider {
   }
 
   async exec(name: string, request: ExecRequest): Promise<ExecResult> {
+    // The platform only execs in awake sandboxes; make sure sbx keeps this one up.
+    this.keepAwake(name);
     const result = await execInSandbox(name, request.cmd, {
       user: request.user,
       workdir: request.workdir,
@@ -82,14 +109,28 @@ export class LocalWindowsHost implements HostProvider {
   }
 
   stop(name: string): Promise<void> {
+    this.letGo(name);
     return stopSandbox(name);
   }
 
-  start(name: string): Promise<void> {
-    return startSandbox(name);
+  async start(name: string): Promise<void> {
+    await startSandbox(name);
+    this.keepAwake(name);
+  }
+
+  /** sbx has no pause; stop keeps the disk, and that is what sleep needs. */
+  sleep(name: string): Promise<void> {
+    this.letGo(name);
+    return stopSandbox(name);
+  }
+
+  async wake(name: string): Promise<void> {
+    await startSandbox(name);
+    this.keepAwake(name);
   }
 
   delete(name: string): Promise<void> {
+    this.letGo(name);
     return removeSandbox(name);
   }
 }

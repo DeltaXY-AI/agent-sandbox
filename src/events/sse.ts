@@ -15,8 +15,16 @@ export function parseLastEventId(header: string | undefined): number {
   return Number.isInteger(n) && n > 0 ? n : 0;
 }
 
-/** A text/event-stream Response that replays `buffer` after `afterSeq`, then follows it live. */
-export function sseResponse(buffer: ResponseBuffer, afterSeq = 0, keepaliveMs = KEEPALIVE_MS) {
+/**
+ * A text/event-stream Response that replays `buffer` after `afterSeq`, then follows it live.
+ * `onClose` runs once, when the stream ends or the client goes away.
+ */
+export function sseResponse(
+  buffer: ResponseBuffer,
+  afterSeq = 0,
+  onClose: () => void = () => undefined,
+  keepaliveMs = KEEPALIVE_MS,
+) {
   const encoder = new TextEncoder();
   let cleanup = () => undefined as void;
   const body = new ReadableStream<Uint8Array>({
@@ -32,9 +40,13 @@ export function sseResponse(buffer: ResponseBuffer, afterSeq = 0, keepaliveMs = 
         if (!closed) controller.enqueue(encoder.encode(":keepalive\n\n"));
       }, keepaliveMs);
       let unsubscribe = () => undefined as unknown;
+      let cleaned = false;
       cleanup = () => {
+        if (cleaned) return;
+        cleaned = true;
         clearInterval(timer);
         unsubscribe();
+        onClose();
       };
       unsubscribe = buffer.follow(afterSeq, (e) => {
         if (closed) return;

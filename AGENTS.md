@@ -10,7 +10,9 @@ A TypeScript platform that runs AI agents in Docker Sandboxes microVMs behind on
 
 Weekend 1 done (Nov 12, 2026): Sandbox API (`base` template) and non-streaming `/v1/responses` on the `fx` template, routed by `{id}.localhost`.
 
-Weekend 2 checkpoint passed on fx (Nov 12, 2026): streamed turns with the 9 SSE events, reattach with `Last-Event-ID`, files API (`GET /v1/files`, `GET /v1/files/content`). `npm run acceptance` runs TESTING.md steps 1-5. Not yet built: file writes (PUT, DELETE, PATCH, dir, archive), cancel, public ports, fork, sleep/wake timer, metering, Pi/eve/Claude Code adapters.
+Weekend 2 checkpoint passed on fx (Nov 12, 2026): streamed turns with the 9 SSE events, reattach with `Last-Event-ID`, files API (`GET /v1/files`, `GET /v1/files/content`). `npm run acceptance` runs TESTING.md steps 1-5. Not yet built: file writes (PUT, DELETE, PATCH, dir, archive), cancel, public ports, fork (after the engine switch), keys and workspaces, metering, Pi/eve/Claude Code adapters.
+
+Sleep and wake (Nov 12, 2026): `POST /v1/instances/{id}/sleep`, idle timer (`idle_timeout_seconds`, default 900), any request wakes a sleeping instance; stopped stays off until `/start`. Acceptance step 8 passes on fx.
 
 ## Rules
 
@@ -34,7 +36,7 @@ Node 24 runs the `.ts` files directly; there is no build step. Secrets go in `.e
 | `npm start` | Control plane on `http://localhost:3000`. |
 | `node scripts/build-fx-template.ts` | Build the `fx` sbx template (needed once, and after changing `templates/fx/`). |
 | `npm run smoke` | Drive `sbx` from Node: create, exec, stop, auto-start, delete. |
-| `npm run acceptance` | TESTING.md steps 1-5 (the weekend 2 checkpoint) against a running server: create, streamed turn, disconnect and reattach, files API, exec. `TEMPLATE` (default fx), `PORT`. Costs a few model tokens. |
+| `npm run acceptance` | TESTING.md steps 1-5 and 8 against a running server: create, streamed turn, disconnect and reattach, files API, exec, sleep and wake. `TEMPLATE` (default fx), `PORT`. Costs a few model tokens. |
 | `node --env-file=.env scripts/demo-sandbox-api.ts` | Sandbox API demo (server must be running). |
 | `node --env-file=.env scripts/demo-agent.ts` | Agent demo on fx: first message, follow-up, hello.py (server must be running; costs a few model tokens). |
 | `npm run deploy:do` | Immutable deploy to DigitalOcean: new droplet from `deploy/cloud-init.yaml`, push secrets over SSH, run checks, build fx, run `test-remote`, move the reserved IP, delete old droplets. On failure the new droplet is deleted. Needs a clean git tree and `DOCKER_USERNAME`, `DOCKER_PAT` in `.env`. |

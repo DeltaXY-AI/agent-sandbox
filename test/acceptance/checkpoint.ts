@@ -1,4 +1,5 @@
-// Weekend 2 checkpoint: docs/TESTING.md steps 1-5 on one template, against a running server.
+// Weekend 2 checkpoint plus sleep/wake: docs/TESTING.md steps 1-5 and 8 on one template,
+// against a running server.
 // Run:  node --env-file=.env test/acceptance/checkpoint.ts            (template fx, port 3000)
 // Env:  TEMPLATE (default fx), PORT (default 3000), AGENT_SANDBOX_API_KEY
 // Costs a few model tokens. Prints PASS/FAIL per check; exit code 1 if any check fails.
@@ -256,6 +257,49 @@ try {
     "ls /home/agent lists hello.py, exit 0",
     ls.json?.exit_code === 0 && /^hello\.py$/m.test(ls.json?.stdout ?? ""),
     JSON.stringify(ls.json?.stdout),
+  );
+
+  // Step 8: sleep, send a message, it wakes and the session continues.
+  // Also answers SPEC open question 1: do installed files and the harness's own
+  // session files survive sleep?
+  console.log("\n== step 8: sleep and wake");
+  const STATE =
+    "ls /usr/local/bin/acceptance-marker; find ~/.fx -type f 2>/dev/null | wc -l | tr -d ' '";
+  await api("POST", `/v1/instances/${id}/exec`, {
+    command: "echo installed > /usr/local/bin/acceptance-marker",
+    user: "root",
+  });
+  const before = await api("POST", `/v1/instances/${id}/exec`, { command: STATE });
+  const slept = await api("POST", `/v1/instances/${id}/sleep`);
+  check("POST /sleep -> sleeping", slept.json?.status === "sleeping", slept.json?.status);
+  const t8 = Date.now();
+  const followUp = await agent("POST", "/v1/responses", {
+    input:
+      "Without using any tools: what is the name of the Python file you created earlier in this conversation? Answer with just the file name.",
+    session_id: sessionId,
+  });
+  const reply = JSON.parse(followUp.text || "{}");
+  check(
+    "a turn on the sleeping instance wakes it and completes",
+    followUp.status === 200 && reply.status === "completed",
+    `${((Date.now() - t8) / 1000).toFixed(1)}s, ${followUp.status} ${reply.status}`,
+  );
+  check(
+    "the reply remembers the earlier turn (hello.py)",
+    /hello\.py/i.test(reply.output_text ?? ""),
+    JSON.stringify(reply.output_text?.slice(0, 80)),
+  );
+  const awake = await api("GET", `/v1/instances/${id}`);
+  check("instance is running again", awake.json?.status === "running", awake.json?.status);
+  const after = await api("POST", `/v1/instances/${id}/exec`, { command: STATE });
+  const [, beforeFx] = (before.json?.stdout ?? "").trim().split("\n");
+  const [marker, afterFx] = (after.json?.stdout ?? "").trim().split("\n");
+  check(
+    "installed file and harness session files survived sleep",
+    marker === "/usr/local/bin/acceptance-marker" &&
+      Number(afterFx) >= Number(beforeFx) &&
+      Number(beforeFx) > 0,
+    `marker ${marker ? "kept" : "lost"}, fx files ${beforeFx} -> ${afterFx}`,
   );
 } finally {
   const del = await api("DELETE", `/v1/instances/${id}`);

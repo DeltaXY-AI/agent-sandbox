@@ -92,7 +92,7 @@ describe("sse writer", () => {
   it("writes :keepalive comments while waiting", async () => {
     const b = new ResponseBuffer("r", "s");
     b.push(created);
-    const text = readAll(sseResponse(b, 1, 5));
+    const text = readAll(sseResponse(b, 1, undefined, 5));
     await new Promise((r) => setTimeout(r, 30));
     b.push(completed);
     expect(await text).toContain(":keepalive\n\n");

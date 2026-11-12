@@ -81,6 +81,11 @@ export function agentApp(deps: AgentDeps) {
         401,
       );
     }
+    // Any authenticated request wakes a sleeping instance and counts as activity
+    // (SPEC section 4). Stopped instances stay off; routes that need them running say so.
+    const status = deps.instances.get(instanceId).status;
+    if (status === "sleeping" || status === "waking") await deps.instances.ensureAwake(instanceId);
+    deps.instances.touch(instanceId);
     await next();
   });
 
@@ -101,8 +106,11 @@ export function agentApp(deps: AgentDeps) {
   app.get("/v1/health", async (c) => {
     const instanceId = c.env.instanceId;
     await deps.instances.refresh();
-    // A request to a stopped sandbox wakes it (SPEC section 4).
-    if (deps.instances.get(instanceId).status === "stopped") await deps.instances.start(instanceId);
+    // Refresh can find the sandbox stopped behind our back (now sleeping): wake it too.
+    // A stopped instance only reports itself.
+    if (deps.instances.get(instanceId).status === "sleeping") {
+      await deps.instances.ensureAwake(instanceId);
+    }
     const instance = deps.instances.get(instanceId);
     const harnessName = TEMPLATES[instance.template]?.harness;
     // Weekend 1: the harness is a CLI started per turn, so ready == sandbox running.
@@ -114,10 +122,7 @@ export function agentApp(deps: AgentDeps) {
     const instanceId = c.env.instanceId;
     const body = responseBody.parse(await c.req.json());
     const harness = harnessFor(instanceId);
-    const instance = deps.instances.get(instanceId);
-    if (instance.status !== "running" && instance.status !== "stopped") {
-      throw new ApiError(409, "instance_not_ready", `Instance is ${instance.status}`);
-    }
+    await deps.instances.ensureAwake(instanceId);
 
     const map = sessionsOf(instanceId);
     let session: Session;
@@ -153,6 +158,8 @@ export function agentApp(deps: AgentDeps) {
 
     // Runs to the end even if the client disconnects; reattach reads the buffer.
     const turn = (async (): Promise<TurnResult> => {
+      // The instance must not sleep while a turn runs.
+      const release = deps.instances.hold(instanceId);
       try {
         const result = await harness.runTurn(
           (req) => deps.instances.exec(instanceId, req),
@@ -179,6 +186,7 @@ export function agentApp(deps: AgentDeps) {
           },
         };
       } finally {
+        release();
         session.active_response_id = null;
         session.updated_at = now();
       }
@@ -206,7 +214,8 @@ export function agentApp(deps: AgentDeps) {
       return result;
     });
 
-    if (body.stream) return sseResponse(buffer);
+    // An open stream keeps the instance awake while it is connected.
+    if (body.stream) return sseResponse(buffer, 0, deps.instances.hold(instanceId));
 
     const result = await turn;
     // A failed turn is HTTP 200 with status "failed" (SPEC section 3).
@@ -236,7 +245,11 @@ export function agentApp(deps: AgentDeps) {
     if (!buffer) {
       throw new ApiError(404, "response_not_found", "No such response, or its record expired");
     }
-    return sseResponse(buffer, parseLastEventId(c.req.header("last-event-id")));
+    return sseResponse(
+      buffer,
+      parseLastEventId(c.req.header("last-event-id")),
+      deps.instances.hold(c.env.instanceId),
+    );
   });
 
   app.route("/v1/files", filesRoutes(deps.instances));

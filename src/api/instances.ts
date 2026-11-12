@@ -2,7 +2,12 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { SandboxSecret } from "../hosts/types.ts";
-import type { InstanceService } from "../instances/service.ts";
+import {
+  DEFAULT_IDLE_TIMEOUT_SECONDS,
+  MAX_IDLE_TIMEOUT_SECONDS,
+  MIN_IDLE_TIMEOUT_SECONDS,
+  type InstanceService,
+} from "../instances/service.ts";
 
 const createBody = z.object({
   template: z.string().default("base"),
@@ -11,6 +16,12 @@ const createBody = z.object({
   resources: z
     .object({ cpu: z.number().int().positive().optional(), memory: z.string().optional() })
     .optional(),
+  idle_timeout_seconds: z
+    .number()
+    .int()
+    .min(MIN_IDLE_TIMEOUT_SECONDS)
+    .max(MAX_IDLE_TIMEOUT_SECONDS)
+    .default(DEFAULT_IDLE_TIMEOUT_SECONDS),
 });
 
 const execBody = z.object({
@@ -77,6 +88,7 @@ export function instancesRoutes(
     });
   });
 
+  app.post("/:id/sleep", async (c) => c.json(await service.sleep(c.req.param("id"))));
   app.post("/:id/stop", async (c) => c.json(await service.stop(c.req.param("id"))));
   app.post("/:id/start", async (c) => c.json(await service.start(c.req.param("id"))));
 

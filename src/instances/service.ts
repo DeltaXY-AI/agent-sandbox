@@ -1,9 +1,22 @@
-// Instances: in-memory state + lifecycle transitions over a HostProvider.
+// Instances: in-memory state + lifecycle transitions over a HostProvider (SPEC section 4).
+//
+// Sleep and wake: an instance is idle when no work is in flight (turns, exec, file calls,
+// open streams) and nothing touched it for idle_timeout_seconds. sweepIdle() puts idle
+// instances to sleep; any request through use() wakes a sleeping one. A stopped instance
+// stays off until start() (decision: sleeping wakes itself, stopped does not).
 import { randomBytes } from "node:crypto";
 import type { ExecRequest, ExecResult, HostProvider, SandboxSecret } from "../hosts/types.ts";
 
 export type InstanceStatus =
-  "provisioning" | "running" | "stopping" | "stopped" | "starting" | "deleting" | "failed";
+  | "provisioning"
+  | "running"
+  | "sleeping"
+  | "waking"
+  | "stopping"
+  | "stopped"
+  | "starting"
+  | "deleting"
+  | "failed";
 
 export interface Instance {
   id: string;
@@ -11,6 +24,9 @@ export interface Instance {
   status: InstanceStatus;
   created_at: string;
   updated_at: string;
+  /** Last request, turn, exec or stream activity. */
+  last_active_at: string;
+  idle_timeout_seconds: number;
   metadata: Record<string, string>;
   /** Agent API base URL for this instance. */
   url: string;
@@ -25,6 +41,7 @@ export interface CreateInstanceInput {
   metadata?: Record<string, string>;
   resources?: { cpu?: number; memory?: string };
   secrets?: SandboxSecret[];
+  idle_timeout_seconds?: number;
 }
 
 export class ApiError extends Error {
@@ -38,18 +55,45 @@ export class ApiError extends Error {
   }
 }
 
-const now = () => new Date().toISOString();
+/** SPEC section 4: default 900 s, range 300-86400. */
+export const DEFAULT_IDLE_TIMEOUT_SECONDS = 900;
+export const MIN_IDLE_TIMEOUT_SECONDS = 300;
+export const MAX_IDLE_TIMEOUT_SECONDS = 86_400;
+
+export interface InstanceServiceOptions {
+  /** Clock, injectable for tests. */
+  now?: () => number;
+  /** How long a request waits for a sleeping instance to wake (Agent37: 503 wake_timeout). */
+  wakeTimeoutMs?: number;
+}
 
 export class InstanceService {
   private readonly instances = new Map<string, Instance>();
+  /** Work in flight per instance; an instance with work never goes to sleep. */
+  private readonly inFlight = new Map<string, number>();
+  /** One wake per instance at a time; concurrent requests share it. */
+  private readonly waking = new Map<string, Promise<void>>();
   private readonly host: HostProvider;
   private readonly prefix: string;
   private readonly urlFor: (id: string) => string;
+  private readonly clock: () => number;
+  private readonly wakeTimeoutMs: number;
 
-  constructor(host: HostProvider, prefix: string, urlFor: (id: string) => string) {
+  constructor(
+    host: HostProvider,
+    prefix: string,
+    urlFor: (id: string) => string,
+    options: InstanceServiceOptions = {},
+  ) {
     this.host = host;
     this.prefix = prefix;
     this.urlFor = urlFor;
+    this.clock = options.now ?? Date.now;
+    this.wakeTimeoutMs = options.wakeTimeoutMs ?? 3 * 60_000;
+  }
+
+  private iso(): string {
+    return new Date(this.clock()).toISOString();
   }
 
   /** Adopt sandboxes this platform created before a restart. Template is not recoverable yet. */
@@ -61,9 +105,11 @@ export class InstanceService {
       this.instances.set(s.name, {
         id: s.name,
         template: "unknown",
-        status: s.status === "running" ? "running" : "stopped",
+        status: s.status === "running" ? "running" : "sleeping",
         created_at: s.createdAt,
-        updated_at: now(),
+        updated_at: this.iso(),
+        last_active_at: this.iso(),
+        idle_timeout_seconds: DEFAULT_IDLE_TIMEOUT_SECONDS,
         metadata: {},
         url: this.urlFor(s.name),
       });
@@ -78,8 +124,10 @@ export class InstanceService {
       id,
       template: input.template,
       status: "provisioning",
-      created_at: now(),
-      updated_at: now(),
+      created_at: this.iso(),
+      updated_at: this.iso(),
+      last_active_at: this.iso(),
+      idle_timeout_seconds: input.idle_timeout_seconds ?? DEFAULT_IDLE_TIMEOUT_SECONDS,
       metadata: input.metadata ?? {},
       url: this.urlFor(id),
       agent_key: `ak_${randomBytes(24).toString("hex")}`,
@@ -96,7 +144,10 @@ export class InstanceService {
         memory: input.resources?.memory,
       })
       .then(
-        () => this.setStatus(id, "running"),
+        () => {
+          this.touch(id);
+          this.setStatus(id, "running");
+        },
         (err: unknown) => this.setStatus(id, "failed", String(err)),
       );
     return { ...instance };
@@ -109,16 +160,19 @@ export class InstanceService {
   /**
    * Re-read the real state from the host. Sandboxes can stop (or vanish) without going
    * through us. Only settled states are corrected; in-flight transitions are left alone.
+   * A sandbox stopped behind our back is treated as sleeping, so the next request wakes it.
    */
   async refresh(): Promise<void> {
     const actual = new Map((await this.host.list()).map((s) => [s.name, s.status]));
     for (const instance of this.instances.values()) {
-      if (instance.status !== "running" && instance.status !== "stopped") continue;
+      if (!["running", "sleeping", "stopped"].includes(instance.status)) continue;
       const status = actual.get(instance.id);
-      if (status === undefined)
+      if (status === undefined) {
         this.setStatus(instance.id, "failed", "Sandbox no longer exists on the host");
-      else if (status === "running" || status === "stopped") {
-        if (status !== instance.status) this.setStatus(instance.id, status);
+      } else if (status === "stopped" && instance.status === "running") {
+        this.setStatus(instance.id, "sleeping");
+      } else if (status === "running" && instance.status !== "running") {
+        this.setStatus(instance.id, "running");
       }
     }
   }
@@ -129,30 +183,147 @@ export class InstanceService {
     return { ...instance };
   }
 
-  async exec(id: string, request: ExecRequest): Promise<ExecResult> {
-    const instance = this.requireStatus(id, ["running", "stopped"]);
-    // sbx exec starts a stopped sandbox, so reflect that.
-    if (instance.status === "stopped") this.setStatus(id, "starting");
+  /** Record activity: resets the idle clock. */
+  touch(id: string): void {
+    const instance = this.instances.get(id);
+    if (instance) instance.last_active_at = this.iso();
+  }
+
+  /**
+   * Mark work in flight (an open stream, a running turn). The instance will not sleep
+   * until the returned release is called. Activity is recorded at both ends.
+   */
+  hold(id: string): () => void {
+    this.inFlight.set(id, (this.inFlight.get(id) ?? 0) + 1);
+    this.touch(id);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.inFlight.set(id, Math.max(0, (this.inFlight.get(id) ?? 1) - 1));
+      this.touch(id);
+    };
+  }
+
+  /**
+   * Make sure the instance is running, waking it if it sleeps. Throws 409 for stopped or
+   * not-ready instances and 503 wake_timeout if waking takes too long.
+   */
+  async ensureAwake(id: string): Promise<void> {
+    const instance = this.get(id);
+    if (instance.status === "running") return;
+    if (instance.status === "sleeping" || instance.status === "waking") {
+      await this.wake(id);
+      return;
+    }
+    if (instance.status === "stopped") {
+      throw new ApiError(409, "instance_stopped", `Instance ${id} is stopped; start it first`);
+    }
+    throw new ApiError(409, "instance_not_ready", `Instance ${id} is ${instance.status}`);
+  }
+
+  /** Run work against an awake instance, holding it awake while the work runs. */
+  async use<T>(id: string, work: () => Promise<T>): Promise<T> {
+    await this.ensureAwake(id);
+    const release = this.hold(id);
     try {
-      return await this.host.exec(id, request);
+      return await work();
     } finally {
-      this.setStatus(id, "running");
+      release();
     }
   }
 
+  exec(id: string, request: ExecRequest): Promise<ExecResult> {
+    return this.use(id, () => this.host.exec(id, request));
+  }
+
+  async sleep(id: string): Promise<Instance> {
+    const instance = this.requireStatus(id, ["running", "sleeping"]);
+    if (instance.status === "sleeping") return this.get(id);
+    if ((this.inFlight.get(id) ?? 0) > 0) {
+      throw new ApiError(409, "instance_busy", `Instance ${id} has work in flight`);
+    }
+    this.setStatus(id, "stopping");
+    await this.transition(id, () => this.host.sleep(id), "sleeping");
+    return this.get(id);
+  }
+
+  /** Put every idle instance to sleep. Called on a timer by the server. */
+  async sweepIdle(): Promise<string[]> {
+    const slept: string[] = [];
+    for (const instance of this.instances.values()) {
+      if (instance.status !== "running" || (this.inFlight.get(instance.id) ?? 0) > 0) continue;
+      const idleMs = this.clock() - Date.parse(instance.last_active_at);
+      if (idleMs < instance.idle_timeout_seconds * 1000) continue;
+      try {
+        await this.sleep(instance.id);
+        slept.push(instance.id);
+      } catch (err) {
+        console.error(`idle sleep of ${instance.id} failed: ${String(err)}`);
+      }
+    }
+    return slept;
+  }
+
+  /** Start sweepIdle on an interval. Returns a stop function. */
+  startIdleTimer(intervalMs = 30_000): () => void {
+    let running = false;
+    const timer = setInterval(() => {
+      if (running) return;
+      running = true;
+      void this.sweepIdle()
+        .then((slept) => {
+          for (const id of slept) console.log(`${id} idle, now sleeping`);
+        })
+        .finally(() => (running = false));
+    }, intervalMs);
+    timer.unref();
+    return () => clearInterval(timer);
+  }
+
+  private wake(id: string): Promise<void> {
+    let pending = this.waking.get(id);
+    if (!pending) {
+      this.setStatus(id, "waking");
+      pending = this.transition(id, () => this.host.wake(id), "running").finally(() => {
+        this.waking.delete(id);
+        this.touch(id);
+      });
+      this.waking.set(id, pending);
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new ApiError(503, "wake_timeout", `Instance ${id} did not wake in time`)),
+        this.wakeTimeoutMs,
+      );
+    });
+    return Promise.race([pending, timeout]).finally(() => clearTimeout(timer));
+  }
+
   async stop(id: string): Promise<Instance> {
-    this.requireStatus(id, ["running", "stopped"]);
-    if (this.get(id).status === "stopped") return this.get(id);
+    const instance = this.requireStatus(id, ["running", "sleeping", "stopped"]);
+    if (instance.status === "stopped") return this.get(id);
+    if (instance.status === "sleeping") {
+      // Already off on the host; only the intent changes (no wake on request).
+      this.setStatus(id, "stopped");
+      return this.get(id);
+    }
     this.setStatus(id, "stopping");
     await this.transition(id, () => this.host.stop(id), "stopped");
     return this.get(id);
   }
 
   async start(id: string): Promise<Instance> {
-    this.requireStatus(id, ["running", "stopped"]);
-    if (this.get(id).status === "running") return this.get(id);
+    const instance = this.requireStatus(id, ["running", "sleeping", "stopped"]);
+    if (instance.status === "running") return this.get(id);
+    if (instance.status === "sleeping") {
+      await this.wake(id);
+      return this.get(id);
+    }
     this.setStatus(id, "starting");
     await this.transition(id, () => this.host.start(id), "running");
+    this.touch(id);
     return this.get(id);
   }
 
@@ -173,6 +344,7 @@ export class InstanceService {
       }
     }
     this.instances.delete(id);
+    this.inFlight.delete(id);
   }
 
   private async transition(id: string, action: () => Promise<void>, next: InstanceStatus) {
@@ -201,7 +373,7 @@ export class InstanceService {
     const instance = this.instances.get(id);
     if (!instance) return;
     instance.status = status;
-    instance.updated_at = now();
+    instance.updated_at = this.iso();
     if (error) instance.error = error;
     else delete instance.error;
   }

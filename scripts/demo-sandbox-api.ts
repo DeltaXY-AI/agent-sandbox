@@ -46,12 +46,15 @@ try {
     command: "uname -sr; . /etc/os-release; echo $PRETTY_NAME; whoami",
   });
   await call("POST", `/v1/instances/${id}/exec`, {
-    command: "echo 'survives stop' > ~/note.txt && ls ~",
+    command: "echo 'survives sleep' > ~/note.txt && ls ~",
   });
   await call("POST", `/v1/instances/${id}/exec`, { command: "exit 3" });
-  await call("POST", `/v1/instances/${id}/stop`);
+  // Sleep keeps the disk; the next request wakes it.
+  await call("POST", `/v1/instances/${id}/sleep`);
   await call("POST", `/v1/instances/${id}/exec`, { command: "cat ~/note.txt" });
+  // Stop is a real off switch: requests get 409 until /start.
   await call("POST", `/v1/instances/${id}/stop`);
+  await call("POST", `/v1/instances/${id}/exec`, { command: "true" });
   await call("POST", `/v1/instances/${id}/start`);
   await call("GET", "/v1/instances");
   await call("GET", "/v1/instances/sb-doesnotexist");

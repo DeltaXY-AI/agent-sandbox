@@ -31,6 +31,8 @@ function secretsForTemplate(template: string): SandboxSecret[] {
 for (const name of Object.keys(TEMPLATES)) secretsForTemplate(name);
 
 const adopted = await instances.adoptExisting();
+// Every 30 s, put instances idle longer than their idle_timeout_seconds to sleep.
+instances.startIdleTimer();
 const app = buildApp({
   apiKey: config.apiKey,
   instances,

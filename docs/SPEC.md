@@ -161,6 +161,9 @@ Any state -> `failed`. `deleting -> deleted`.
 - Sleep = stop the microVM, keep the disk. Meter only disk.
 - Wake = any request to `{id}.<domain>` while `sleeping`. The router holds the request until `/v1/health` is healthy.
 - Idle timeout default 900 s (range 300-86400).
+- Idle = no work in flight (running turn, open stream, exec or files call) and no authenticated request for `idle_timeout_seconds`. A sweep every 30 s sleeps idle instances.
+- Sleeping and stopped differ (Nov 12, 2026): a sleeping instance wakes on any authenticated request (agent host, exec, files) and on `/start`; a stopped instance stays off until `/start`, and requests get `409 instance_stopped`. A wake that takes longer than 3 minutes answers `503 wake_timeout` (Agent37's code).
+- `HostProvider.sleep` / `wake`: on sbx they are `stop` / auto-start (sbx has no pause); a Firecracker host would snapshot and restore (decision 26).
 
 ---
 
@@ -247,6 +250,7 @@ Installed on Satish's laptop: `sbx version v0.50.1`. These are read from `sbx --
 | `sbx template save X TAG` | On a running sandbox it asks for confirmation and fails without a TTY (the `--force` it suggests does not exist). On a stopped sandbox it saves without asking: 4.2 s. |
 | `sbx create shell --template TAG --pull never` | 4.5 s from the saved fx template (faster than the 7.8 s base create). First fx turn on it: 3.0 s. |
 | `{id}.localhost` on Windows | curl and browsers resolve it to 127.0.0.1. Node `dns.lookup` and `fetch` do not (ENOTFOUND); Node clients must send the `Host` header. |
+| Idle auto-stop | A local sandbox with no open exec stops by itself about 30 s after the last exec ends (measured: 35 s idle; a 75 s `sleep` exec held it up until 105 s). No `sbx settings` key or `create` flag changes it (`--ttl` is cloud only). It also kills anything the agent left running, such as a web server. Fix: `LocalWindowsHost` keeps one `sbx exec <name> sleep infinity` open while a sandbox should be awake and kills it on sleep, stop and delete, so the platform's idle timer decides. |
 
 ### Tested by running on DigitalOcean (Ubuntu 24.04 droplet, Nov 12, 2026)
 
@@ -279,7 +283,7 @@ Mapping from the relay: text-delta -> `response.output_text.delta`; reasoning-de
 
 | # | Question | How to answer |
 |---|---|---|
-| 1 | Does a stopped local sandbox keep the agent's session files and installed packages? | Stop, exec, compare. |
+| 1 | Does a stopped local sandbox keep the agent's session files and installed packages? | **Answered Nov 12, 2026, sbx v0.50.1: yes.** A file installed as root in `/usr/local/bin` and fx's session files under `~/.fx` (10 files) survive sleep (`sbx stop` then auto-start), and the next fx turn with `--resume` remembers the earlier conversation (acceptance step 8). |
 | 2 | How long do `template save` and create-from-template take locally? Is fork fast enough to be useful? | Time it. |
 | 3 | Can Pi and eve run as kits? | Build a minimal kit for each. |
 | 4 | Do Docker's terms allow running local `sbx` as a hosted multi-tenant service? | **Answered Nov 12, 2026: not without written permission from Docker** (read of the published text, not legal advice). `sbx` is proprietary and "subject to the Docker Subscription Service Agreement" (package `copyright` file; `sbx login` says logging in accepts it). The DSSA (Aug 26, 2026) licenses use "for Customer's internal business purposes" (2.1) and forbids to "lease, rent, loan, or otherwise transfer the Services to any third party" and to operate "products or services intended to be offered to third parties in competition with the Services" (3.3); Docker sells Cloud Sandboxes and a Sandboxes API. Personal accounts are non-commercial (3.1(a)). The docs FAQ calls local `sbx` "free to use, including for commercial and professional work", but says nothing about hosting for others. Outcome: decision 26. Sources: https://www.docker.com/legal/docker-subscription-service-agreement/ , https://docs.docker.com/ai/sandboxes/faq/ , https://github.com/docker/sbx-releases (LICENSE). |

@@ -30,3 +30,5 @@ Run steps 1-10 on each template. Mark each cell when it passes.
 Steps 1-5 pass on at least one template. If not, decide: continue, switch to Docker + gVisor, or stop.
 
 **Passed on fx, Nov 12, 2026** (SPEC decision 24): `npm run acceptance`, 18 of 18 checks, sbx v0.50.1, fx 0.0.16. Local Windows host: 51 s. DigitalOcean droplet (Ubuntu 24.04, s-4vcpu-8gb, blr1, deployed with `npm run deploy:do`, run through an SSH tunnel): 25 s.
+
+**Step 8 passes on fx, Nov 12, 2026:** sleep, then a follow-up turn wakes the sandbox (6.0 s including the turn) and the reply names `hello.py` from the earlier turn. Local Windows host, sbx v0.50.1. Part of `npm run acceptance` (23 checks).

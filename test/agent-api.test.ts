@@ -8,7 +8,7 @@ import type {
   HostStatus,
   SandboxSpec,
 } from "../src/hosts/types.ts";
-import { InstanceService } from "../src/instances/service.ts";
+import { InstanceService, type InstanceServiceOptions } from "../src/instances/service.ts";
 
 class FakeHost implements HostProvider {
   readonly name = "fake";
@@ -35,12 +35,22 @@ class FakeHost implements HostProvider {
   async start(name: string) {
     this.sandboxes.set(name, "running");
   }
+  wakeDelayMs = 0;
+  wakes = 0;
+  async sleep(name: string) {
+    this.sandboxes.set(name, "stopped");
+  }
+  async wake(name: string) {
+    this.wakes++;
+    if (this.wakeDelayMs) await new Promise((r) => setTimeout(r, this.wakeDelayMs));
+    this.sandboxes.set(name, "running");
+  }
   async delete(name: string) {
     this.sandboxes.delete(name);
   }
 }
 
-function setup() {
+function setup(options: InstanceServiceOptions = {}) {
   const seen: TurnInput[] = [];
   let release: () => void = () => undefined;
   let block = false;
@@ -68,7 +78,7 @@ function setup() {
     },
   };
   const host = new FakeHost();
-  const instances = new InstanceService(host, "sb-", (id) => `http://${id}.localhost`);
+  const instances = new InstanceService(host, "sb-", (id) => `http://${id}.localhost`, options);
   const app = buildApp({
     apiKey: "k",
     instances,
@@ -288,7 +298,7 @@ describe("Streaming", () => {
 });
 
 describe("status refresh", () => {
-  it("shows a sandbox stopped behind our back, and health wakes it", async () => {
+  it("treats a sandbox stopped behind our back as sleeping, and health wakes it", async () => {
     const { app, host } = setup();
     const inst = await createRunning(app);
     host.sandboxes.set(inst.id, "stopped");
@@ -296,7 +306,7 @@ describe("status refresh", () => {
     const listed = (await (
       await app.request(`/v1/instances/${inst.id}`, { headers: { authorization: "Bearer k" } })
     ).json()) as { status: string };
-    expect(listed.status).toBe("stopped");
+    expect(listed.status).toBe("sleeping");
 
     const health = await (await app.fetch(agentReq(inst.id, inst.agent_key, "/v1/health"))).json();
     expect(health).toMatchObject({ healthy: true, status: "running" });
@@ -311,5 +321,134 @@ describe("status refresh", () => {
       await app.request(`/v1/instances/${inst.id}`, { headers: { authorization: "Bearer k" } })
     ).json()) as { status: string; error: string };
     expect(res).toMatchObject({ status: "failed", error: "Sandbox no longer exists on the host" });
+  });
+});
+
+describe("Sleep and wake", () => {
+  const api = (path: string, init: RequestInit = {}) => ({
+    ...init,
+    headers: { authorization: "Bearer k", "content-type": "application/json" },
+  });
+  const status = async (app: ReturnType<typeof setup>["app"], id: string) =>
+    ((await (await app.request(`/v1/instances/${id}`, api(""))).json()) as { status: string })
+      .status;
+
+  it("sleeps an instance after idle_timeout_seconds with no activity, not before", async () => {
+    let t = 1_000_000;
+    const ctx = setup({ now: () => t });
+    const inst = await createRunning(ctx.app);
+    t += 899_000;
+    expect(await ctx.instances.sweepIdle()).toEqual([]);
+    t += 2_000;
+    expect(await ctx.instances.sweepIdle()).toEqual([inst.id]);
+    expect(await status(ctx.app, inst.id)).toBe("sleeping");
+    expect(ctx.host.sandboxes.get(inst.id)).toBe("stopped");
+  });
+
+  it("any agent request resets the idle clock", async () => {
+    let t = 0;
+    const ctx = setup({ now: () => t });
+    const inst = await createRunning(ctx.app);
+    t += 800_000;
+    await ctx.app.fetch(agentReq(inst.id, inst.agent_key, "/v1/sessions"));
+    t += 800_000;
+    expect(await ctx.instances.sweepIdle()).toEqual([]);
+  });
+
+  it("never sleeps while a turn runs or a stream is open", async () => {
+    let t = 0;
+    const ctx = setup({ now: () => t });
+    const inst = await createRunning(ctx.app);
+    ctx.blockNext();
+    const live = await ctx.app.fetch(
+      agentReq(inst.id, inst.agent_key, "/v1/responses", { input: "x", stream: true }),
+    );
+    t += 10 * 3_600_000;
+    expect(await ctx.instances.sweepIdle()).toEqual([]);
+    ctx.release();
+    await live.text(); // stream ends with the turn
+    t += 901_000;
+    expect(await ctx.instances.sweepIdle()).toEqual([inst.id]);
+  });
+
+  it("a request to a sleeping instance wakes it once, even when requests race", async () => {
+    const ctx = setup();
+    const inst = await createRunning(ctx.app);
+    await ctx.app.request(`/v1/instances/${inst.id}/sleep`, api("", { method: "POST" }));
+    ctx.host.wakeDelayMs = 20;
+    const [a, b] = await Promise.all([
+      ctx.app.fetch(agentReq(inst.id, inst.agent_key, "/v1/responses", { input: "a" })),
+      ctx.app.request(
+        `/v1/instances/${inst.id}/exec`,
+        api("", { method: "POST", body: JSON.stringify({ command: "ls" }) }),
+      ),
+    ]);
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    expect(ctx.host.wakes).toBe(1);
+    expect(await status(ctx.app, inst.id)).toBe("running");
+  });
+
+  it("returns 503 wake_timeout when waking takes too long", async () => {
+    const ctx = setup({ wakeTimeoutMs: 10 });
+    const inst = await createRunning(ctx.app);
+    await ctx.instances.sleep(inst.id);
+    ctx.host.wakeDelayMs = 50;
+    const res = await ctx.app.fetch(agentReq(inst.id, inst.agent_key, "/v1/sessions"));
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({ error: { code: "wake_timeout" } });
+  });
+
+  it("a stopped instance stays off until /start", async () => {
+    const ctx = setup();
+    const inst = await createRunning(ctx.app);
+    await ctx.app.request(`/v1/instances/${inst.id}/stop`, api("", { method: "POST" }));
+    const turn = await ctx.app.fetch(
+      agentReq(inst.id, inst.agent_key, "/v1/responses", { input: "x" }),
+    );
+    expect(turn.status).toBe(409);
+    expect(await turn.json()).toMatchObject({ error: { code: "instance_stopped" } });
+    const health = await (
+      await ctx.app.fetch(agentReq(inst.id, inst.agent_key, "/v1/health"))
+    ).json();
+    expect(health).toMatchObject({ healthy: false, status: "stopped" });
+    const exec = await ctx.app.request(
+      `/v1/instances/${inst.id}/exec`,
+      api("", { method: "POST", body: JSON.stringify({ command: "ls" }) }),
+    );
+    expect(exec.status).toBe(409);
+    await ctx.app.request(`/v1/instances/${inst.id}/start`, api("", { method: "POST" }));
+    expect(await status(ctx.app, inst.id)).toBe("running");
+  });
+
+  it("POST /sleep refuses while a turn runs, and idle_timeout_seconds is validated", async () => {
+    const ctx = setup();
+    const inst = await createRunning(ctx.app);
+    ctx.blockNext();
+    const running = ctx.app.fetch(
+      agentReq(inst.id, inst.agent_key, "/v1/responses", { input: "x" }),
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    const busy = await ctx.app.request(
+      `/v1/instances/${inst.id}/sleep`,
+      api("", { method: "POST" }),
+    );
+    expect(busy.status).toBe(409);
+    ctx.release();
+    await running;
+
+    const tooShort = await ctx.app.request(
+      "/v1/instances",
+      api("", {
+        method: "POST",
+        body: JSON.stringify({ template: "fx", idle_timeout_seconds: 60 }),
+      }),
+    );
+    expect(tooShort.status).toBe(400);
+    const created = (await (
+      await ctx.app.request("/v1/instances", api("", { method: "POST", body: "{}" }))
+    ).json()) as { idle_timeout_seconds: number; last_active_at: string };
+    expect(created.idle_timeout_seconds).toBe(900);
+    expect(created.last_active_at).toMatch(/^\d{4}-/);
   });
 });

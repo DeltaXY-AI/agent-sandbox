@@ -51,5 +51,9 @@ export interface HostProvider {
   exec(name: string, request: ExecRequest): Promise<ExecResult>;
   stop(name: string): Promise<void>;
   start(name: string): Promise<void>;
+  /** Pause a sandbox and keep its disk (SPEC section 4). sbx: stop. Firecracker: snapshot. */
+  sleep(name: string): Promise<void>;
+  /** Resume a sleeping sandbox. sbx: start. Firecracker: restore the snapshot. */
+  wake(name: string): Promise<void>;
   delete(name: string): Promise<void>;
 }
