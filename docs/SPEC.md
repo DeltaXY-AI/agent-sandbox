@@ -198,8 +198,8 @@ Any state -> `failed`. `deleting -> deleted`.
 |---|---|
 | Weekend 1 | `sbx` on Windows driven from Node: create, exec, delete. Sandbox API (`/v1/instances`, exec, stop, start) on the `base` template. fx template. `/v1/responses` non-streaming on fx. Demo: Agent37's "first agent message" and a hello.py turn. Repo public with README, AGENTS.md, this spec. |
 | **Weekend 2 - checkpoint** | **One template passes acceptance steps 1-5.** If not: decide to continue, switch to Docker + gVisor, or stop. **Passed on fx, Nov 12, 2026** (`npm run acceptance`). |
-| Weekend 3 | Pi and eve adapters. Sleep and wake, public ports. Keys and meter. (Fork moves after the engine switch, decision 27.) |
-| Weekend 4 | All three templates pass the full acceptance script. First cloud experiment (KVM check on Hetzner and DigitalOcean). |
+| Weekend 3 | Pi and eve adapters. Sleep and wake, public ports. Keys and meter. **Done, Nov 12, 2026.** |
+| Weekend 4 | All three templates pass the full acceptance script. First cloud experiment (KVM check on Hetzner and DigitalOcean). **Done, Nov 13, 2026:** steps 1-10 on fx, Pi and eve and the cross-check (fork built on sbx, decision 27; Claude Code replaced by fx, decision 35). DigitalOcean has KVM and ran the checkpoint; Hetzner is still open (section 8, question 5). |
 | Phase 2 | Remaining `sbx` harnesses, backups, crons, metrics, profiles, regions, custom images, wallet. Decisions 12, 15, 16 and the Phase 2 parts of 17-19. |
 | Not yet placed in a weekend | Phase 1 additions from decisions 13, 14 and the Phase 1 parts of 17-19. |
 
@@ -222,6 +222,8 @@ Run steps 1-10 on each of **fx, Pi and eve** (decision 35). Then run step 11 onc
 11. **Cross-check:** send the same prompt to all three templates. Event names and field shapes are identical; all three produce a working `hello.py`.
 
 Phase 1 is done only when all 3 x 10 checks and the cross-check pass.
+
+**Passed Nov 13, 2026** on fx, Pi and eve (`npm run acceptance` with `TEMPLATE` each, `npm run cross-check`; docs/TESTING.md). Phase 1 scope the script does not test is still to build: file writes (PUT, DELETE, PATCH, dir, archive), cancel, WebSocket proxying, user-supplied eve projects, bring-your-own model keys, and the Phase 1 extras of decisions 13, 14 and 17-19.
 
 ---
 

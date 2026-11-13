@@ -2,27 +2,29 @@
 
 An open-source platform that gives every AI agent its own isolated computer, behind one API.
 
-Send a message to `POST /v1/responses`. The platform runs the agent (Claude Code, Pi, eve, Codex, Gemini CLI and others) inside its own Docker Sandboxes microVM, streams the result as server-sent events, and keeps the session, the files and the disk between turns.
+Send a message to `POST /v1/responses`. The platform runs the agent (fx, Pi, eve; Claude Code, Codex, Gemini CLI and others later) inside its own Docker Sandboxes microVM, streams the result as server-sent events, and keeps the session, the files and the disk between turns.
 
-**Status:** weekend 1 working: Sandbox API and non-streaming agent turns on fx, locally on Windows. Built in the open, one weekend at a time.
+**Status:** Phase 1 acceptance passes (Nov 13, 2026) on fx, Pi and eve, locally on Windows: streamed turns with the 9 events and reattach, files, exec, public ports, fork, sleep and wake, workspaces and isolation, usage, and an identical event shape across all three harnesses. Built in the open, one weekend at a time.
 
 ## Why this exists
 
 To learn what it takes to build a hosted agent platform like [Agent37](https://www.agent37.com/docs/agents-api/examples): sandboxes, lifecycle, routing, a common Agent API, streaming, files, and metering. Every layer, built from scratch, with the failures written down.
 
-## What it will do (Phase 1)
+## What it does (Phase 1)
 
 | Layer | What it does |
 |---|---|
 | Sandbox | One microVM per sandbox, through Docker Sandboxes (`sbx`). |
 | Lifecycle | Create, sleep, wake, stop, fork, delete. The disk survives sleep. |
 | Routing | `{id}.localhost` reaches the right sandbox and its published ports. |
-| Agent API | `/v1/responses`, `/v1/sessions`. One active turn per session. Cancel. |
+| Agent API | `/v1/responses`, `/v1/sessions`. One active turn per session. (Cancel: not yet.) |
 | Streaming | Every harness emits the same 9 SSE events. Disconnect and reattach without losing events. |
-| Files | List, read, write, move and delete files in the sandbox. |
+| Files | List and read files in the sandbox. (Write, move, delete: not yet.) |
 | Business | Workspaces, API keys, per-minute and per-token metering. |
 
-Templates in Phase 1: **fx, Pi, eve, Claude Code**. Weekend 1 uses fx through the Vercel AI Gateway to keep model cost low. More harnesses in Phase 2.
+Templates in Phase 1: **fx, Pi, eve** (Claude Code moved to Phase 2). Models go through the Vercel AI Gateway; the key never enters the sandbox. More harnesses in Phase 2.
+
+Try it: `npm start`, then `npm run acceptance` (steps 1-10, `TEMPLATE=fx|pi|eve`) and `npm run cross-check` (step 11).
 
 ## Requirements
 

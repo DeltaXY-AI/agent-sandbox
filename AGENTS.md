@@ -8,9 +8,13 @@ A TypeScript platform that runs AI agents in Docker Sandboxes microVMs behind on
 
 ## Status
 
+**Phase 1 acceptance passes (Nov 13, 2026):** `docs/TESTING.md` steps 1-10 on fx, Pi and eve, and the cross-check (step 11). Still to build in Phase 1 scope (not tested by the script): file writes (PUT, DELETE, PATCH, dir, archive), cancel, WebSocket proxying, user-supplied eve projects, bring-your-own model keys, and the Phase 1 extras of decisions 13, 14 and 17-19. Later: the Firecracker-class engine before external customers (SPEC decision 26), then Phase 2.
+
+History:
+
 Weekend 1 done (Nov 12, 2026): Sandbox API (`base` template) and non-streaming `/v1/responses` on the `fx` template, routed by `{id}.localhost`.
 
-Weekend 2 checkpoint passed on fx (Nov 12, 2026): streamed turns with the 9 SSE events, reattach with `Last-Event-ID`, files API (`GET /v1/files`, `GET /v1/files/content`). `npm run acceptance` runs TESTING.md steps 1-5. Not yet built: file writes (PUT, DELETE, PATCH, dir, archive), cancel, WebSocket proxying, wallet and prices, user-supplied eve projects. Claude Code left Phase 1 (SPEC decision 35).
+Weekend 2 checkpoint passed on fx (Nov 12, 2026): streamed turns with the 9 SSE events, reattach with `Last-Event-ID`, files API (`GET /v1/files`, `GET /v1/files/content`). `npm run acceptance` then ran TESTING.md steps 1-5.
 
 Sleep and wake (Nov 12, 2026): `POST /v1/instances/{id}/sleep`, idle timer (`idle_timeout_seconds`, default 900), any request wakes a sleeping instance; stopped stays off until `/start`. Acceptance step 8 passes on fx.
 
@@ -63,7 +67,7 @@ Node 24 runs the `.ts` files directly; there is no build step. Secrets go in `.e
 
 In Git Bash, set `MSYS_NO_PATHCONV=1` before passing Linux paths to `sbx`.
 
-## Layout (planned)
+## Layout
 
 ```
 src/

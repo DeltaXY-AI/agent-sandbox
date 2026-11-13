@@ -68,7 +68,7 @@ The control plane never opens a network connection into a VM except to a publish
 | Interface | Knows about | One per |
 |---|---|---|
 | `HostProvider` | Where sandboxes run and how to drive `sbx` there. | Host (local-windows, hetzner, digitalocean). |
-| `HarnessAdapter` | One agent CLI: its command line, output format, session ids, errors. Translates to our response shape and the 9 events. | Harness (fx, pi, eve, claude-code). |
+| `HarnessAdapter` | One agent CLI: its command line, output format, session ids, errors. Translates to our response shape and the 9 events. | Harness (fx, pi, eve). |
 
 Nothing outside these two may know which host or which harness is in use (AGENTS.md rule 4).
 

@@ -1,6 +1,6 @@
 # PRD - agent-sandbox
 
-> Status: draft, Nov 12, 2026. Owner: Satish.
+> Status: Phase 1 acceptance passed, Nov 13, 2026. Owner: Satish.
 > Sources: Agent37 docs (read Nov 12, 2026), `sbx` v0.50.1 help text (read, not yet run), `docs/SPEC.md`.
 > Where this file and `docs/SPEC.md` disagree on a decision, the spec wins. Phase decisions for features the spec did not cover were made by Satish on Nov 12, 2026 (section 3.10).
 
@@ -89,9 +89,10 @@ Every Agent37 feature from its docs, mapped to the `sbx` primitive we build on (
 | Agent37 feature | How we build it | Phase |
 |---|---|---|
 | `agent37-base` (plain Linux, no agent) | `sbx` `shell` agent. | 1 |
-| `agent37-claude-code` | `sbx` built-in `claude` + our adapter shim (stream-json to 9 events). | 1 |
-| `agent37-pi` | Our sandbox kit. | 1 |
-| eve (not in Agent37) | Our sandbox kit. | 1 |
+| fx (not in Agent37) | Our saved template: fx 0.0.16 + turn relay. | 1 |
+| `agent37-pi` | Our saved template: Pi 1.5.2 (no kit needed). | 1 |
+| eve (not in Agent37) | Our saved template: eve on Node 24 + default project. | 1 |
+| `agent37-claude-code` | `sbx` built-in `claude` + adapter shim. Left Phase 1 (SPEC decision 35). | 2 |
 | `agent37-codex`, `agent37-opencode` | `sbx` built-ins + adapter. | 2 |
 | Gemini, Copilot, Cursor, Droid, Kiro (not in Agent37) | `sbx` built-ins + adapter. | 2 |
 | `agent37-hermes`, `agent37-openclaw`, `agent37-grok`, `agent37-n8n`, `agent37-ubuntu`, `agent37-android` | Not built into `sbx`; each needs a kit. | 2 |
@@ -200,7 +201,9 @@ All ours. `sbx` only gives us `exec` to run the harness.
 
 ## 5. Success criteria
 
-Phase 1 is done when `docs/TESTING.md` passes: steps 1-10 on Claude Code, Pi and eve, plus the cross-check. The checkpoint at the end of weekend 2 is steps 1-5 on one template.
+Phase 1 is done when `docs/TESTING.md` passes: steps 1-10 on fx, Pi and eve, plus the cross-check. The checkpoint at the end of weekend 2 is steps 1-5 on one template.
+
+**Met Nov 13, 2026:** every check passes on fx, Pi and eve. Still to build in Phase 1 scope (not tested by the script): file writes (PUT, DELETE, PATCH, dir, archive), cancel, WebSocket proxying, user-supplied eve projects, bring-your-own model keys, and the Phase 1 extras of decisions 13, 14 and 17-19.
 
 ## 6. Risks
 

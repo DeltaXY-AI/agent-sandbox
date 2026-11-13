@@ -1,6 +1,8 @@
 # Acceptance script - Phase 1
 
-Phase 1 is done only when every check below passes. This file becomes an executable script in `test/acceptance/`.
+Phase 1 is done only when every check below passes. The script is `test/acceptance/`: `npm run acceptance` (steps 1-10, `TEMPLATE=fx|pi|eve`) and `npm run cross-check` (step 11).
+
+**Status: all checks pass, Nov 13, 2026** (fx, Pi and eve; SPEC decision 35 replaced Claude Code with fx).
 
 ## Per-template checks
 
