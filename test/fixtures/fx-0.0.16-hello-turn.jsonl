@@ -1,0 +1,25 @@
+{"t":"part","part":{"type":"reasoning-delta","id":"reasoning-0","delta":"Simple"},"at":1794543144335}
+{"t":"part","part":{"type":"reasoning-delta","id":"reasoning-0","delta":" task"},"at":1794543144335}
+{"t":"part","part":{"type":"reasoning-delta","id":"reasoning-0","delta":". Write file"},"at":1794543144336}
+{"t":"part","part":{"type":"reasoning-delta","id":"reasoning-0","delta":","},"at":1794543144343}
+{"t":"part","part":{"type":"reasoning-delta","id":"reasoning-0","delta":" run it. Brief"},"at":1794543144351}
+{"t":"part","part":{"type":"reasoning-delta","id":"reasoning-0","delta":" update first."},"at":1794543144362}
+{"t":"part","part":{"type":"text-delta","id":"txt-0","delta":"I'll create `"},"at":1794543144381}
+{"t":"part","part":{"type":"text-delta","id":"txt-0","delta":"hello.py` in the workspace"},"at":1794543144399}
+{"t":"part","part":{"type":"text-delta","id":"txt-0","delta":" and run it with Python"},"at":1794543144400}
+{"t":"part","part":{"type":"text-delta","id":"txt-0","delta":".\n\n"},"at":1794543144402}
+{"t":"part","part":{"type":"tool-input-start","id":"call_911aa7078d25452db023dd269ec4935e","toolName":"write_file"},"at":1794543144588}
+{"t":"part","part":{"type":"tool-input-start","id":"call_5be954ceb40047539b5b099bbb9f55ab","toolName":"shell"},"at":1794543144589}
+{"t":"part","part":{"type":"tool-call","toolCallId":"call_911aa7078d25452db023dd269ec4935e","toolName":"write_file","input":"{\"path\": \"hello.py\", \"content\": \"print(\\\"hello\\\")\\n\"}"},"at":1794543144609}
+{"t":"part","part":{"type":"tool-call","toolCallId":"call_5be954ceb40047539b5b099bbb9f55ab","toolName":"shell","input":"{\"action\": \"run\", \"command\": \"python3 hello.py; echo \\\"exit=$?\\\"\", \"cwd\": \"/home/agent\"}"},"at":1794543144609}
+{"t":"tool_result","id":"call_911aa7078d25452db023dd269ec4935e","tool":"write_file","error":null,"at":1794543144726}
+{"t":"tool_result","id":"call_5be954ceb40047539b5b099bbb9f55ab","tool":"shell","error":null,"at":1794543144726}
+{"t":"part","part":{"type":"text-delta","id":"txt-0","delta":"`"},"at":1794543145641}
+{"t":"part","part":{"type":"text-delta","id":"txt-0","delta":"hello.py` created"},"at":1794543145641}
+{"t":"part","part":{"type":"text-delta","id":"txt-0","delta":" with"},"at":1794543145641}
+{"t":"part","part":{"type":"text-delta","id":"txt-0","delta":" `print(\"hello\")`"},"at":1794543145652}
+{"t":"part","part":{"type":"text-delta","id":"txt-0","delta":" and run"},"at":1794543145656}
+{"t":"part","part":{"type":"text-delta","id":"txt-0","delta":" successfully"},"at":1794543145777}
+{"t":"part","part":{"type":"text-delta","id":"txt-0","delta":":\n\n```\nhello\n"},"at":1794543145777}
+{"t":"part","part":{"type":"text-delta","id":"txt-0","delta":"exit=0\n```"},"at":1794543145777}
+{"t":"result","exit":0,"stdout":"{\"output\":\"I'll create `hello.py` in the workspace and run it with Python.\\n\\n`hello.py` created with `print(\\\"hello\\\")` and run successfully:\\n\\n```\\nhello\\nexit=0\\n```\",\"final_output\":\"`hello.py` created with `print(\\\"hello\\\")` and run successfully:\\n\\n```\\nhello\\nexit=0\\n```\",\"exit_code\":0,\"model\":\"deepseek/deepseek-v4.1-flash\",\"resolved_provider\":\"token-pass\",\"session_id\":\"lwOi6NpzMJhk\",\"steps\":2,\"tool_calls\":[{\"name\":\"write_file\",\"status\":\"success\"},{\"name\":\"shell\",\"status\":\"success\",\"command_result\":{\"kind\":\"command\",\"command\":\"python3 hello.py; echo \\\"exit=$?\\\"\",\"cwd\":\"/home/agent\",\"exit_code\":0,\"signal\":null,\"timed_out\":false,\"duration_ms\":51,\"stdout_bytes\":13,\"stderr_bytes\":0,\"truncated\":false,\"output_file\":\"fx-command-replay-0ec9303800fd-8e9b148d8e655317c54a6ecaf2966875301bf404e92158aab643a5b077d6039f.bin\",\"stdout_file\":null,\"stderr_file\":null}}],\"usage\":{\"input_tokens\":15735,\"output_tokens\":185,\"cache_read_tokens\":7680}}\n","stderr":"Full access enabled: fx permission checks disabled\nWriting hello.py\nRunning python3 hello.py; echo \"exit=$?\"\nhello\nexit=0\n","at":1794543145809}

@@ -17,6 +17,7 @@
     "destroy:do": "node scripts/destroy-do.ts",
     "test:remote": "node --env-file=.env scripts/test-remote.ts",
     "acceptance": "node --env-file=.env test/acceptance/checkpoint.ts",
+    "cross-check": "node --env-file=.env test/acceptance/cross-check.ts",
     "demo:workspaces": "node --env-file=.env scripts/demo-workspaces.ts"
   },
   "repository": {

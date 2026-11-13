@@ -3,114 +3,7 @@
 // Run:  node --env-file=.env test/acceptance/checkpoint.ts            (template fx, port 3000)
 // Env:  TEMPLATE (default fx), PORT (default 3000), AGENT_SANDBOX_API_KEY, AGENT_SANDBOX_ADMIN_KEY
 // Costs a few model tokens. Prints PASS/FAIL per check; exit code 1 if any check fails.
-import { request } from "node:http";
-import { EVENT_NAMES } from "../../src/events/types.ts";
-
-const PORT = Number(process.env.PORT ?? 3000);
-const TEMPLATE = process.env.TEMPLATE ?? "fx";
-const key = process.env.AGENT_SANDBOX_API_KEY;
-if (!key) throw new Error("AGENT_SANDBOX_API_KEY not set (use --env-file=.env)");
-
-let failures = 0;
-function check(label: string, ok: boolean, detail = "") {
-  if (!ok) failures++;
-  console.log(`${ok ? "PASS" : "FAIL"}  ${label}${detail ? `  (${detail})` : ""}`);
-}
-
-interface Frame {
-  id: number;
-  event: string;
-  data: any;
-}
-
-/** Connect to 127.0.0.1 and set Host: Node cannot resolve {id}.localhost on Windows. */
-function call(
-  method: string,
-  host: string,
-  path: string,
-  headers: Record<string, string>,
-  body?: unknown,
-  opts: { onFrame?: (f: Frame) => boolean | void } = {},
-): Promise<{ status: number; text: string; headers: Record<string, unknown>; frames: Frame[] }> {
-  const data = body === undefined ? undefined : JSON.stringify(body);
-  return new Promise((resolve, reject) => {
-    const frames: Frame[] = [];
-    const req = request(
-      {
-        host: "127.0.0.1",
-        port: PORT,
-        method,
-        path,
-        headers: {
-          host: `${host}:${PORT}`,
-          ...(data ? { "content-type": "application/json" } : {}),
-          ...headers,
-        },
-      },
-      (res) => {
-        let text = "";
-        let pending = "";
-        const done = () =>
-          resolve({ status: res.statusCode ?? 0, text, headers: res.headers, frames });
-        res.setEncoding("utf8").on("data", (chunk: string) => {
-          text += chunk;
-          if (!String(res.headers["content-type"]).startsWith("text/event-stream")) return;
-          pending += chunk;
-          let end;
-          while ((end = pending.indexOf("\n\n")) !== -1) {
-            const raw = pending.slice(0, end);
-            pending = pending.slice(end + 2);
-            if (raw.startsWith(":")) continue; // keepalive
-            const f: Partial<Frame> = {};
-            for (const line of raw.split("\n")) {
-              if (line.startsWith("id: ")) f.id = Number(line.slice(4));
-              else if (line.startsWith("event: ")) f.event = line.slice(7);
-              else if (line.startsWith("data: ")) f.data = JSON.parse(line.slice(6));
-            }
-            frames.push(f as Frame);
-            if (opts.onFrame?.(f as Frame) === false) {
-              req.destroy(); // client disconnects
-              done();
-              return;
-            }
-          }
-        });
-        res.on("end", done);
-        res.on("error", () => done());
-      },
-    );
-    req.on("error", (err) => (req.destroyed ? undefined : reject(err)));
-    req.setTimeout(10 * 60_000, () => req.destroy(new Error(`${method} ${path} timed out`)));
-    req.end(data);
-  });
-}
-
-const api = (method: string, path: string, body?: unknown) =>
-  call(method, "localhost", path, { authorization: `Bearer ${key}` }, body).then((r) => ({
-    ...r,
-    json: r.text ? JSON.parse(r.text) : null,
-  }));
-
-/** Every frame is one of the 9 events, ids run 1..n, created first, exactly one terminal last. */
-function wellFormed(frames: Frame[]): string {
-  if (frames.length === 0) return "no events";
-  const bad = frames.find((f) => !EVENT_NAMES.includes(f.event as never));
-  if (bad) return `unknown event ${bad.event}`;
-  const gap = frames.findIndex((f, i) => f.id !== i + 1);
-  if (gap !== -1) return `id ${frames[gap]?.id} at position ${gap + 1}`;
-  if (frames[0]?.event !== "response.created") return `first event ${frames[0]?.event}`;
-  const terminals = frames.filter((f) => /response\.(completed|failed)$/.test(f.event));
-  if (terminals.length !== 1) return `${terminals.length} terminal events`;
-  if (frames.at(-1) !== terminals[0]) return "terminal event is not last";
-  return "";
-}
-
-const counts = (frames: Frame[]) =>
-  Object.entries(
-    frames.reduce<Record<string, number>>((m, f) => ((m[f.event] = (m[f.event] ?? 0) + 1), m), {}),
-  )
-    .map(([k, v]) => `${k.replace("response.", "")}=${v}`)
-    .join(" ");
+import { api, call, check, counts, failed, PORT, TEMPLATE, wellFormed, key } from "./lib.ts";
 
 const started = Date.now();
 const created = await api("POST", "/v1/instances", { template: TEMPLATE });
@@ -524,8 +417,8 @@ try {
 }
 
 console.log(
-  failures === 0
+  failed() === 0
     ? `\nCHECKPOINT PASSED on ${TEMPLATE} (${((Date.now() - started) / 1000).toFixed(0)}s)`
-    : `\n${failures} CHECK(S) FAILED`,
+    : `\n${failed()} CHECK(S) FAILED`,
 );
-process.exit(failures === 0 ? 0 : 1);
+process.exit(failed() === 0 ? 0 : 1);

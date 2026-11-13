@@ -18,8 +18,8 @@
 | 6 | Routing | Per-sandbox subdomain, `{id}.<domain>`. Locally `{id}.localhost`. |
 | 7 | Where it runs | Develop on Satish's Windows laptop. Stay cloud-independent. Experiment on DigitalOcean, Hetzner and others. |
 | 8 | Language | TypeScript (Node). |
-| 8b | Extra template | eve, in addition to Pi and Claude Code. |
-| 9 | Phase 1 proof | The acceptance script (section 7) passes on Pi, eve and Claude Code. |
+| 8b | Extra template | eve, in addition to Pi and fx (decision 35). |
+| 9 | Phase 1 proof | The acceptance script (section 7) passes on fx, Pi and eve (decision 35). |
 | 10 | Time box | 4 weekends. Checkpoint after weekend 2. |
 | 11 | Visibility | Open source from day 1. |
 | 12 | Instance ops (PATCH, update, resize, disk size, mount_path, types) | Phase 2. |
@@ -45,6 +45,7 @@
 | 32 | Meter (Nov 12) | `GET /v1/usage?from=&to=` (UTC days, `to` inclusive, default last 30 days, at most 90) returns `totals`, `days`, `instances` and `by_model` with `awake_minutes`, `sleeping_minutes`, `turns`, `input_tokens`, `output_tokens`; Agent37's shape without money. Awake = provisioning, running, starting, stopping; sleeping (disk only) = sleeping, waking, stopped. Minutes come from recorded state changes (`instance_events`), tokens from each finished turn (`turn_usage`), both in SQLite and kept after deletion. `GET /v1/instances/{id}/events` lists the state changes. No prices yet: cost fields come with prices and the wallet. The wallet create gate (402 `insufficient_balance`) moves to Phase 2 with the wallet. |
 | 33 | Pi adapter (Nov 12) | Pi through its CLI JSON mode (`pi --mode json`, one turn per exec, stdin closed), not the SDK: the same events with no glue code in the sandbox. Our own saved template `agent-sandbox-pi:<version>-r<n>` with a pinned Pi (`npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.5.2`), not Docker's `pi-kit`. Models through the Vercel AI Gateway (`--provider vercel-ai-gateway`), key swapped by the sbx proxy. We choose the Pi session id (`--session-id`). Input tokens = input + cacheRead + cacheWrite, as fx reports them. Next: bring-your-own provider keys (OpenRouter, OpenAI, ...) for every harness (decision 17). Later: subscription sign-in (ChatGPT/Codex OAuth), after a terms check; its token would live inside the sandbox. |
 | 34 | eve adapter (Nov 12) | The `eve` template ships Node 24, a default coding-agent eve project in `/home/agent/eve-agent` (built at template time) and `templates/eve/eve-turn.mjs`, which starts `eve start` when needed and relays the session stream for one turn. eve assigns the session id. The project fixes the model (`deepseek/deepseek-v4.1-flash` in `agent/agent.ts`); a per-request `model` is not applied. `limits.sessionUsage` is off, so no turn pauses for a budget prompt; a paused turn fails instead of hanging. eve is pinned exactly (`1.0.0-rc.10`); an upgrade strands sessions, so it is a new template revision. Next: the user sends their own eve project (needs file writes or a create-time upload). |
+| 35 | Claude Code (Nov 13) | Out of Phase 1. fx takes its place as the third Phase 1 template (decision 9, section 7); it already passes steps 1-10. Claude Code may come back later as one more `sbx` harness (decision 3, Phase 2 list). |
 
 ---
 
@@ -183,10 +184,9 @@ Any state -> `failed`. `deleting -> deleted`.
 | Template | Phase | Contents |
 |---|---|---|
 | `fx` | 1 | `shell` sandbox + fx 0.0.16 in `/usr/local/bin` + `templates/fx/` (gateway relay, `fx-turn.sh`), saved as `sbx` template `agent-sandbox-fx:0.0.16`. Rebuild with `scripts/build-fx-template.ts`. Adapter runs `fx ask --json`; streaming later through ACP (`fx acp`). |
-| `claude-code` | 1 | Claude Code + adapter shim (stream-json output -> 9 events). |
 | `pi` | 1 | Pi coding agent + adapter shim. |
 | `eve` | 1 | eve runtime. The user sends an eve agent project; the shim runs it and maps eve events to the 9 events. |
-| `codex`, `gemini`, other `sbx` harnesses | 2 | One adapter each. |
+| `claude-code`, `codex`, `gemini`, other `sbx` harnesses | 2 | One adapter each. Claude Code left Phase 1 (decision 35). |
 | `base` | 1 | Plain Linux, no agent. Exec only. |
 | Custom Dockerfile | 2 | User-supplied image. |
 
@@ -207,7 +207,7 @@ Any state -> `failed`. `deleting -> deleted`.
 
 ## 7. Phase 1 acceptance script (the definition of done)
 
-Run steps 1-10 on each of **Pi, eve and Claude Code**. Then run step 11 once.
+Run steps 1-10 on each of **fx, Pi and eve** (decision 35). Then run step 11 once.
 
 1. Create a sandbox from the template.
 2. Send a streamed turn: "write hello.py that prints hello, then run it". Receive the 9-event sequence ending in `response.completed`.
@@ -334,6 +334,15 @@ eve (npm `eve`, Vercel) is a framework: an agent is a project folder (`package.j
 | Source | Waking the source while the fork is created from the saved image works; the source is off only for stop + save. |
 | Whole fork | Acceptance step 7, two rounds: fork `running` after 14-18 s (fx), 15-17 s (Pi), 14-27 s (eve); the fork has `hello.py`, the same `session_id` answers `hello.py`, a file written on the fork is not on the source. |
 | Hang | Once (Nov 13, step 9) a `sbx exec` never returned. Killing `sbx.exe` on timeout did not end the call because a child kept stdout open: `runSbx` now returns on process exit after a kill (exit 124), and management commands time out after 2 minutes. |
+
+### Cross-check (step 11; fx 0.0.16, Pi 1.5.2, eve 1.0.0-rc.10, sbx v0.50.1, Nov 13, 2026)
+
+| Test | Result |
+|---|---|
+| Shapes | Identical on every shared event, optional fields included (`label`, `arguments`, `duration_ms`); no field outside the spec. Nothing in the adapters needed changing. |
+| Reasoning | Same model (`deepseek/deepseek-v4.1-flash`) on all three, but only fx streams `response.reasoning.delta`, and not on every turn. Pi and eve sent none in four turns each. |
+| Tool names | Passed through from the harness, so they differ: fx `write_file`/`shell`, Pi `write`/`bash`, eve `write_file`/`bash`. A client should not branch on them. |
+| sbx stall | The first run failed: for about 2 minutes `sbx ls` and `sbx policy` did not answer while three sandboxes were created. With the timeout (fork section) the call failed after 120 s instead of hanging; the next two runs passed. Plain parallel creates, secrets and deny rules did not reproduce it (11 s). Intermittent, cause unknown; second time today. |
 
 ### Still open (answer by running code)
 

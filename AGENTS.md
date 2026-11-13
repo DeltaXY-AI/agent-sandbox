@@ -10,7 +10,7 @@ A TypeScript platform that runs AI agents in Docker Sandboxes microVMs behind on
 
 Weekend 1 done (Nov 12, 2026): Sandbox API (`base` template) and non-streaming `/v1/responses` on the `fx` template, routed by `{id}.localhost`.
 
-Weekend 2 checkpoint passed on fx (Nov 12, 2026): streamed turns with the 9 SSE events, reattach with `Last-Event-ID`, files API (`GET /v1/files`, `GET /v1/files/content`). `npm run acceptance` runs TESTING.md steps 1-5. Not yet built: file writes (PUT, DELETE, PATCH, dir, archive), cancel, WebSocket proxying, wallet and prices, Claude Code adapter, user-supplied eve projects.
+Weekend 2 checkpoint passed on fx (Nov 12, 2026): streamed turns with the 9 SSE events, reattach with `Last-Event-ID`, files API (`GET /v1/files`, `GET /v1/files/content`). `npm run acceptance` runs TESTING.md steps 1-5. Not yet built: file writes (PUT, DELETE, PATCH, dir, archive), cancel, WebSocket proxying, wallet and prices, user-supplied eve projects. Claude Code left Phase 1 (SPEC decision 35).
 
 Sleep and wake (Nov 12, 2026): `POST /v1/instances/{id}/sleep`, idle timer (`idle_timeout_seconds`, default 900), any request wakes a sleeping instance; stopped stays off until `/start`. Acceptance step 8 passes on fx.
 
@@ -25,6 +25,8 @@ Pi (Nov 12, 2026): template `pi` (Pi 1.5.2, `pi --mode json` through the AI Gate
 eve (Nov 12, 2026): template `eve` (eve 1.0.0-rc.10 on Node 24, default project in `/home/agent/eve-agent`, `templates/eve/eve-turn.mjs`). `TEMPLATE=eve npm run acceptance` passes steps 1-6 and 8-10, as fx and Pi do.
 
 Fork (Nov 13, 2026): `POST /v1/instances/{id}/fork` (sbx: stop, template save, create from it, remove the image; sessions copied). Acceptance step 7 passes on fx, Pi and eve, so `npm run acceptance` runs steps 1-10.
+
+Cross-check (Nov 13, 2026): `npm run cross-check` (TESTING.md step 11) passes on fx, Pi and eve: identical event names and field shapes (`src/events/schema.ts`), and a working `hello.py` on all three. Claude Code left Phase 1 (SPEC decision 35), so the Phase 1 acceptance (3 x 10 checks and the cross-check) passes.
 
 ## Rules
 
@@ -51,6 +53,7 @@ Node 24 runs the `.ts` files directly; there is no build step. Secrets go in `.e
 | `node scripts/build-eve-template.ts` | Build the `eve` sbx template: Node 24, the default eve project (npm install + eve build), the turn shim (needed once, and after changing `templates/eve/` or `EVE_VERSION`). |
 | `npm run smoke` | Drive `sbx` from Node: create, exec, stop, auto-start, delete. |
 | `npm run acceptance` | TESTING.md steps 1-10 against a running server: create, streamed turn, disconnect and reattach, files API, exec, public ports, fork, sleep and wake, workspaces and isolation, usage. Step 9 needs `AGENT_SANDBOX_ADMIN_KEY`. `TEMPLATE` (default fx), `PORT`. Costs a few model tokens. |
+| `npm run cross-check` | TESTING.md step 11 against a running server: the same prompt on fx, Pi and eve at once; checks every event against the spec's schema, that the field shapes are identical, and that `hello.py` runs on all three. `TEMPLATES` (default `fx,pi,eve`), `PORT`. Costs a few model tokens. |
 | `node --env-file=.env scripts/demo-sandbox-api.ts` | Sandbox API demo (server must be running). |
 | `node --env-file=.env scripts/demo-agent.ts` | Agent demo on fx: first message, follow-up, hello.py (server must be running; costs a few model tokens). |
 | `npm run demo:workspaces` | Keys and workspaces as a six-act story: admin creates two workspaces, isolation by key and by network, key revocation, what the database keeps (server must be running; `-- --pause` waits between acts; no model tokens). |
@@ -68,7 +71,7 @@ src/
   router/      {id}.<domain> routing and wake-on-request
   events/      the 9-event model, SSE writer, replay buffer
   hosts/       HostProvider implementations (local-windows, hetzner, digitalocean)
-  harnesses/   HarnessAdapter implementations (claude-code, pi, eve, ...)
+  harnesses/   HarnessAdapter implementations (fx, pi, eve, ...)
   meter/       usage metering
 templates/     what goes into the fx and eve sbx templates
 test/acceptance/  the docs/TESTING.md script
@@ -77,5 +80,5 @@ test/acceptance/  the docs/TESTING.md script
 ## First tasks (weekend 1)
 
 1. Drive `sbx` from Node: create a sandbox, run `ls` through exec, list with `--json`, remove it.
-2. Run Claude Code non-interactively in a sandbox through exec with stream-json output, and print the raw events.
+2. ~~Run Claude Code non-interactively~~ Done with fx instead (SPEC decisions 20 and 35).
 3. Answer the "Still open" questions in `docs/SPEC.md` section 8 by running code. Record the answers there.
