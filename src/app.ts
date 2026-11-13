@@ -8,7 +8,7 @@ import { timingSafeEqual } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { ZodError } from "zod";
 import { adminRoutes } from "./api/admin.ts";
-import { agentApp } from "./api/agent.ts";
+import { agentApp, SessionStore } from "./api/agent.ts";
 import { instancesRoutes } from "./api/instances.ts";
 import type { HarnessAdapter } from "./harnesses/types.ts";
 import { SbxError } from "./lib/sbx.ts";
@@ -74,7 +74,8 @@ export function agentHostId(host: string | undefined, prefix: string): string | 
 
 export function buildApp(deps: AppDeps) {
   const app = new Hono<{ Variables: { workspaceId: string } }>();
-  const agent = agentApp(deps);
+  const sessions = new SessionStore();
+  const agent = agentApp({ ...deps, sessions });
   agent.onError(handleError);
   agent.notFound((c) => c.json({ error: { code: "not_found", message: "No such route" } }, 404));
 
@@ -144,6 +145,7 @@ export function buildApp(deps: AppDeps) {
       signer,
       hostUrl,
       meter: deps.meter,
+      sessions,
     }),
   );
 

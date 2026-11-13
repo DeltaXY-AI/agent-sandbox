@@ -37,7 +37,7 @@
 | 24 | Weekend 2 checkpoint template (Nov 12) | fx. Acceptance steps 1-5 (streaming, reattach, files API) are built and proven on fx. Pi, eve and Claude Code are added later as adapters on top of the same features; decision 9 still defines the Phase 1 proof. |
 | 25 | Deployment (Nov 12) | Immutable: `deploy/cloud-init.yaml` (cloud-independent host recipe, no secrets) plus one script per cloud (`scripts/deploy-do.ts`). Every deploy builds a new server, tests it, then retires the old one. Secrets go over SSH after boot. |
 | 26 | Sandbox engine (Nov 12) | `sbx` is the engine for building and testing only (internal use; see section 8, Docker's terms). Before any external customer, a Firecracker-class `HostProvider` replaces it, chosen by a spike (Firecracker directly, E2B self-hosted, Docker + gVisor). New lifecycle features are written against the `HostProvider` interface, not `sbx` details. |
-| 27 | Fork (Nov 12) | Moves after the engine switch: Firecracker snapshots (memory and disk) do it better than `sbx template save`. Acceptance step 7 waits for it. |
+| 27 | Fork (Nov 12, revised Nov 13) | Built on `sbx` now behind `HostProvider.fork`: stop the source, `sbx template save`, create the fork from the image, remove the image. Copies the disk (files, packages, the harness's session files) and the platform's sessions; not processes, public ports, usage or create-time secrets (fresh ones). The source is refused with 409 while work is in flight and returns to its earlier state. The Firecracker provider redoes it with memory and disk snapshots. |
 | 28 | Idle timeout (Nov 12) | 15 minutes by default. |
 | 29 | Ports (Nov 12) | Agent37's model. Preview URL `{id}-{port}.<domain>` for any port, no registration, needs a credential: the API key (`Authorization: Bearer`), that instance's `X-Agent-Key`, or a signed URL. `public_ports` give permanent unauthenticated URLs (`{prefix}-{id}` or a 20-character slug) for webhooks. The bare `{id}.<domain>` stays the Agent API, so acceptance step 6 opens the preview URL. WebSockets come after step 6. |
 | 30 | Workspaces and keys (Nov 12) | Workspaces own instances; `sk_live_` API keys belong to a workspace and act only inside it (another workspace's instance is 404, as on Agent37). Another system (sign-up, billing) creates workspaces and keys through the admin API, guarded by `AGENT_SANDBOX_ADMIN_KEY`. `AGENT_SANDBOX_API_KEY` is the key of a built-in default workspace. Durable state moves to SQLite (Node's built-in `node:sqlite`, `DATABASE_PATH`, default `data/agent-sandbox.db`): workspaces, key hashes (the plain key is shown once), instance records (owner, template, agent key, settings) and server secrets. Sessions and replay buffers stay in memory. This replaces decision 22's in-memory state for these. |
@@ -233,7 +233,7 @@ Installed on Satish's laptop: `sbx version v0.50.1`. These are read from `sbx --
 |---|---|---|
 | Drive from Node | `sbx ls --json` (or `--format json`). `sbx exec` behaves like `docker exec` and returns the command's exit status (125 = sbx could not run it). `sbx run --detach` prints the sandbox ID. | Looks drivable. Test. |
 | Sleep and wake | `sbx stop` keeps state. `sbx exec` on a stopped sandbox starts it first. `sbx ports --publish` also starts a stopped sandbox. | Good fit. Test that the disk and agent session survive. |
-| Fork | No fork or clone command. `sbx template save` snapshots a sandbox as a template; `sbx run -t TAG` creates a new one from it. | Fork = template save + create. Test speed and size. |
+| Fork | No fork or clone command. `sbx template save` snapshots a sandbox as a template; `sbx run -t TAG` creates a new one from it. | Fork = template save + create. Measured below (fork on sbx). |
 | Public ports | `sbx ports --publish [[HOST_IP:]HOST_PORT:]SANDBOX_PORT`. Binds to loopback with an ephemeral port by default. | Router proxies `{id}.localhost` to the published loopback port. |
 | Built-in agents | claude, codex, copilot, cursor, devin, docker-agent, droid, gemini, kiro, opencode, shell. | **Pi and eve are not built in.** Build them as sandbox kits (local directory, ZIP, git repo or OCI reference) or on the `shell` agent. |
 | Templates | Sandbox kits (`sbx create AGENT|KIT`) plus saved templates (`sbx template save/load/ls`). | Platform templates map to kits. |
@@ -323,12 +323,24 @@ eve (npm `eve`, Vercel) is a framework: an agent is a project folder (`package.j
 | Follow-up turns | Read the stream from `x-eve-stream-tail-index` + 1 (the header is the last line's position), or a turn sees the previous turn's `turn.settled`. |
 | VM stop | Processes die, files stay: the shim restarts `eve start`, and the same eve session continues with its history (8 s including the VM start). |
 
+### Fork on sbx (sbx v0.50.1, Windows 11, Nov 13, 2026)
+
+| Test | Result |
+|---|---|
+| Save | `sbx template save` needs a stopped sandbox (a running one prompts). Saving a stopped fx sandbox: 0.7 s in an empty spike, 1.4-5.7 s after acceptance turns. |
+| Create from it | `sbx create --template agent-sandbox-fork:<id> --pull never`: 4.8 s in the spike, 9.6 s (fx, Pi) to 16 s (eve) with secrets and deny rules, during acceptance. |
+| Image removal | `sbx template rm --force TAG` right after the create works; the fork keeps running and also restarts after `sbx stop` without the image. Without `--force` it asks for confirmation (fails with no terminal). So no image is left per fork. |
+| Env | Create-time `--env` is not in the saved image. The platform keeps each instance's create env in memory and passes it again, with fresh secret placeholders. |
+| Source | Waking the source while the fork is created from the saved image works; the source is off only for stop + save. |
+| Whole fork | Acceptance step 7, two rounds: fork `running` after 14-18 s (fx), 15-17 s (Pi), 14-27 s (eve); the fork has `hello.py`, the same `session_id` answers `hello.py`, a file written on the fork is not on the source. |
+| Hang | Once (Nov 13, step 9) a `sbx exec` never returned. Killing `sbx.exe` on timeout did not end the call because a child kept stdout open: `runSbx` now returns on process exit after a kill (exit 124), and management commands time out after 2 minutes. |
+
 ### Still open (answer by running code)
 
 | # | Question | How to answer |
 |---|---|---|
 | 1 | Does a stopped local sandbox keep the agent's session files and installed packages? | **Answered Nov 12, 2026, sbx v0.50.1: yes.** A file installed as root in `/usr/local/bin` and fx's session files under `~/.fx` (10 files) survive sleep (`sbx stop` then auto-start), and the next fx turn with `--resume` remembers the earlier conversation (acceptance step 8). |
-| 2 | How long do `template save` and create-from-template take locally? Is fork fast enough to be useful? | Time it. |
+| 2 | How long do `template save` and create-from-template take locally? Is fork fast enough to be useful? | **Answered Nov 13, 2026, sbx v0.50.1: yes.** Save 1.4-5.7 s, create from the image 8.5-16 s; a whole fork reaches `running` in 14-27 s (see fork on sbx). The source is off for stop + save only, 2.7-7.3 s. |
 | 3 | Can Pi and eve run as kits? | **Answered Nov 12, 2026:** both run as our own saved templates (pinned versions), like fx. Docker publishes a Pi kit; eve has none. Kits are not needed. |
 | 4 | Do Docker's terms allow running local `sbx` as a hosted multi-tenant service? | **Answered Nov 12, 2026: not without written permission from Docker** (read of the published text, not legal advice). `sbx` is proprietary and "subject to the Docker Subscription Service Agreement" (package `copyright` file; `sbx login` says logging in accepts it). The DSSA (Aug 26, 2026) licenses use "for Customer's internal business purposes" (2.1) and forbids to "lease, rent, loan, or otherwise transfer the Services to any third party" and to operate "products or services intended to be offered to third parties in competition with the Services" (3.3); Docker sells Cloud Sandboxes and a Sandboxes API. Personal accounts are non-commercial (3.1(a)). The docs FAQ calls local `sbx` "free to use, including for commercial and professional work", but says nothing about hosting for others. Outcome: decision 26. Sources: https://www.docker.com/legal/docker-subscription-service-agreement/ , https://docs.docker.com/ai/sandboxes/faq/ , https://github.com/docker/sbx-releases (LICENSE). |
 | 5 | Do Hetzner cloud VMs expose KVM for local-mode `sbx` on Linux? (DigitalOcean: yes, see above.) | Smallest VM, `ls /dev/kvm`, `sbx diagnose`. Fallback: bare metal. |

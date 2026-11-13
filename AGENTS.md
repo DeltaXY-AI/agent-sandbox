@@ -10,7 +10,7 @@ A TypeScript platform that runs AI agents in Docker Sandboxes microVMs behind on
 
 Weekend 1 done (Nov 12, 2026): Sandbox API (`base` template) and non-streaming `/v1/responses` on the `fx` template, routed by `{id}.localhost`.
 
-Weekend 2 checkpoint passed on fx (Nov 12, 2026): streamed turns with the 9 SSE events, reattach with `Last-Event-ID`, files API (`GET /v1/files`, `GET /v1/files/content`). `npm run acceptance` runs TESTING.md steps 1-5. Not yet built: file writes (PUT, DELETE, PATCH, dir, archive), cancel, WebSocket proxying, fork (after the engine switch), wallet and prices, Claude Code adapter, user-supplied eve projects.
+Weekend 2 checkpoint passed on fx (Nov 12, 2026): streamed turns with the 9 SSE events, reattach with `Last-Event-ID`, files API (`GET /v1/files`, `GET /v1/files/content`). `npm run acceptance` runs TESTING.md steps 1-5. Not yet built: file writes (PUT, DELETE, PATCH, dir, archive), cancel, WebSocket proxying, wallet and prices, Claude Code adapter, user-supplied eve projects.
 
 Sleep and wake (Nov 12, 2026): `POST /v1/instances/{id}/sleep`, idle timer (`idle_timeout_seconds`, default 900), any request wakes a sleeping instance; stopped stays off until `/start`. Acceptance step 8 passes on fx.
 
@@ -23,6 +23,8 @@ Meter (Nov 12, 2026): `GET /v1/usage` (awake and sleeping minutes, turns and tok
 Pi (Nov 12, 2026): template `pi` (Pi 1.5.2, `pi --mode json` through the AI Gateway). `TEMPLATE=pi npm run acceptance` passes steps 1-6 and 8-10, as fx does.
 
 eve (Nov 12, 2026): template `eve` (eve 1.0.0-rc.10 on Node 24, default project in `/home/agent/eve-agent`, `templates/eve/eve-turn.mjs`). `TEMPLATE=eve npm run acceptance` passes steps 1-6 and 8-10, as fx and Pi do.
+
+Fork (Nov 13, 2026): `POST /v1/instances/{id}/fork` (sbx: stop, template save, create from it, remove the image; sessions copied). Acceptance step 7 passes on fx, Pi and eve, so `npm run acceptance` runs steps 1-10.
 
 ## Rules
 
@@ -48,7 +50,7 @@ Node 24 runs the `.ts` files directly; there is no build step. Secrets go in `.e
 | `node scripts/build-pi-template.ts` | Build the `pi` sbx template (needed once, and after changing `PI_VERSION`). |
 | `node scripts/build-eve-template.ts` | Build the `eve` sbx template: Node 24, the default eve project (npm install + eve build), the turn shim (needed once, and after changing `templates/eve/` or `EVE_VERSION`). |
 | `npm run smoke` | Drive `sbx` from Node: create, exec, stop, auto-start, delete. |
-| `npm run acceptance` | TESTING.md steps 1-6 and 8-10 against a running server: create, streamed turn, disconnect and reattach, files API, exec, public ports, sleep and wake, workspaces and isolation, usage. Step 9 needs `AGENT_SANDBOX_ADMIN_KEY`. `TEMPLATE` (default fx), `PORT`. Costs a few model tokens. |
+| `npm run acceptance` | TESTING.md steps 1-10 against a running server: create, streamed turn, disconnect and reattach, files API, exec, public ports, fork, sleep and wake, workspaces and isolation, usage. Step 9 needs `AGENT_SANDBOX_ADMIN_KEY`. `TEMPLATE` (default fx), `PORT`. Costs a few model tokens. |
 | `node --env-file=.env scripts/demo-sandbox-api.ts` | Sandbox API demo (server must be running). |
 | `node --env-file=.env scripts/demo-agent.ts` | Agent demo on fx: first message, follow-up, hello.py (server must be running; costs a few model tokens). |
 | `npm run demo:workspaces` | Keys and workspaces as a six-act story: admin creates two workspaces, isolation by key and by network, key revocation, what the database keeps (server must be running; `-- --pause` waits between acts; no model tokens). |

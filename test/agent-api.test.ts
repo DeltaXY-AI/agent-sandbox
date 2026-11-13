@@ -56,6 +56,18 @@ class FakeHost implements HostProvider {
   async delete(name: string) {
     this.sandboxes.delete(name);
   }
+  /** Set to hold a fork mid-copy (the source is off, as on sbx); resolve to let it finish. */
+  forkGate: Promise<void> | undefined;
+  forks: { source: string; spec: SandboxSpec }[] = [];
+  async fork(source: string, spec: SandboxSpec): Promise<HostSandbox> {
+    const was = this.sandboxes.get(source);
+    if (!was) throw new Error(`No sandbox ${source}`);
+    this.forks.push({ source, spec });
+    this.sandboxes.set(source, "stopped");
+    await this.forkGate;
+    this.sandboxes.set(source, was);
+    return this.createSandbox(spec);
+  }
 }
 
 function setup(options: InstanceServiceOptions = {}) {
@@ -789,5 +801,155 @@ describe("Preview URLs and public ports", () => {
     const nothing = await ctx.app.fetch(at(`${inst.id}-8080`, "/", key));
     expect(nothing.status).toBe(502);
     expect(await nothing.json()).toMatchObject({ error: { code: "upstream_unavailable" } });
+  });
+});
+
+describe("Fork (step 7)", () => {
+  const auth = (key = "k", body?: unknown) => ({
+    method: "POST",
+    headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  it("gives a new instance the source's disk and sessions; the same session_id continues there", async () => {
+    const ctx = setup();
+    const src = await createRunning(ctx.app);
+    const first = (await (
+      await ctx.app.fetch(agentReq(src.id, src.agent_key, "/v1/responses", { input: "one" }))
+    ).json()) as { session_id: string };
+
+    const res = await ctx.app.request(
+      `/v1/instances/${src.id}/fork`,
+      auth("k", { metadata: { purpose: "try-b" } }),
+    );
+    expect(res.status).toBe(201);
+    const fork = (await res.json()) as {
+      id: string;
+      agent_key: string;
+      status: string;
+      forked_from: string;
+      template: string;
+      metadata: Record<string, string>;
+      public_ports: unknown[];
+    };
+    expect(fork).toMatchObject({
+      status: "provisioning",
+      forked_from: src.id,
+      template: "fx",
+      metadata: { purpose: "try-b" },
+      public_ports: [],
+    });
+    expect(fork.id).not.toBe(src.id);
+    expect(fork.agent_key).not.toBe(src.agent_key);
+    await tick();
+    expect(ctx.instances.get(fork.id).status).toBe("running");
+    expect(ctx.instances.get(src.id).status).toBe("running");
+    expect(ctx.host.forks).toMatchObject([
+      { source: src.id, spec: { name: fork.id, template: "fx" } },
+    ]);
+
+    // The fork's turn resumes the harness session copied with the disk.
+    const turn = await ctx.app.fetch(
+      agentReq(fork.id, fork.agent_key, "/v1/responses", {
+        input: "two",
+        session_id: first.session_id,
+      }),
+    );
+    expect(turn.status).toBe(200);
+    expect(ctx.seen.at(-1)?.harnessSessionId).toBe("h1");
+    // The two copies are independent from here on.
+    const turnsOf = async (id: string, key: string) =>
+      (
+        (await (
+          await ctx.app.fetch(agentReq(id, key, `/v1/sessions/${first.session_id}`))
+        ).json()) as { turns: number }
+      ).turns;
+    expect(await turnsOf(fork.id, fork.agent_key)).toBe(2);
+    expect(await turnsOf(src.id, src.agent_key)).toBe(1);
+    // The source's old key does not open the fork.
+    expect((await ctx.app.fetch(agentReq(fork.id, src.agent_key, "/v1/sessions"))).status).toBe(
+      401,
+    );
+  });
+
+  it("refuses a source with a turn running, and another workspace's instance is 404", async () => {
+    const ctx = setup();
+    const src = await createRunning(ctx.app);
+    ctx.blockNext();
+    const pending = ctx.app.fetch(agentReq(src.id, src.agent_key, "/v1/responses", { input: "x" }));
+    await tick();
+    const busy = await ctx.app.request(`/v1/instances/${src.id}/fork`, auth());
+    expect(busy.status).toBe(409);
+    expect(((await busy.json()) as { error: { code: string } }).error.code).toBe("instance_busy");
+    ctx.release();
+    await pending;
+
+    const b = (await (
+      await ctx.app.request("/v1/admin/workspaces", auth("admin", { name: "b" }))
+    ).json()) as { api_key: { key: string } };
+    expect(
+      (await ctx.app.request(`/v1/instances/${src.id}/fork`, auth(b.api_key.key))).status,
+    ).toBe(404);
+    expect(ctx.host.forks).toEqual([]);
+  });
+
+  it("while the copy is taken, requests to the source wait and lifecycle calls get 409", async () => {
+    const ctx = setup();
+    const src = await createRunning(ctx.app);
+    let finish: () => void = () => undefined;
+    ctx.host.forkGate = new Promise<void>((r) => (finish = r));
+    const fork = (await (await ctx.app.request(`/v1/instances/${src.id}/fork`, auth())).json()) as {
+      id: string;
+    };
+    await tick();
+    expect(ctx.host.sandboxes.get(src.id)).toBe("stopped");
+
+    // The host shows the source off; that is not a sleep.
+    await ctx.app.request("/v1/instances", { headers: { authorization: "Bearer k" } });
+    expect(ctx.instances.get(src.id).status).toBe("running");
+    for (const path of ["sleep", "stop", "fork"]) {
+      expect((await ctx.app.request(`/v1/instances/${src.id}/${path}`, auth())).status).toBe(409);
+    }
+    expect(
+      (await ctx.app.request(`/v1/instances/${src.id}`, { ...auth(), method: "DELETE" })).status,
+    ).toBe(409);
+
+    let answered = false;
+    const exec = Promise.resolve(
+      ctx.app.request(`/v1/instances/${src.id}/exec`, auth("k", { command: "true" })),
+    ).then((r) => {
+      answered = true;
+      return r;
+    });
+    await tick();
+    expect(answered).toBe(false);
+    finish();
+    expect((await exec).status).toBe(200);
+    expect(ctx.instances.get(fork.id).status).toBe("running");
+    expect(ctx.instances.get(src.id).status).toBe("running");
+  });
+
+  it("a sleeping source stays asleep; a failed copy marks only the fork failed", async () => {
+    const ctx = setup();
+    const src = await createRunning(ctx.app);
+    await ctx.instances.sleep(src.id);
+    const fork = (await (await ctx.app.request(`/v1/instances/${src.id}/fork`, auth())).json()) as {
+      id: string;
+    };
+    await tick();
+    expect(ctx.instances.get(fork.id).status).toBe("running");
+    expect(ctx.instances.get(src.id).status).toBe("sleeping");
+    expect(ctx.host.sandboxes.get(src.id)).toBe("stopped");
+
+    ctx.host.forkGate = Promise.reject(new Error("sbx template save failed"));
+    ctx.host.forkGate.catch(() => undefined);
+    const bad = (await (await ctx.app.request(`/v1/instances/${src.id}/fork`, auth())).json()) as {
+      id: string;
+    };
+    await tick();
+    await tick();
+    expect(ctx.instances.get(bad.id)).toMatchObject({ status: "failed" });
+    expect(ctx.instances.get(src.id).status).toBe("sleeping");
   });
 });

@@ -14,7 +14,7 @@ Run steps 1-10 on each template. Mark each cell when it passes.
 | 4 | Read `hello.py` through the files API. | Content matches what the agent wrote. | [ ] | [x] | [x] |
 | 5 | Run `ls /home/agent` through exec. | Output lists `hello.py`; exit status 0. | [ ] | [x] | [x] |
 | 6 | Ask the agent to start a web server on port 8080. Open the preview URL `http://{id}-8080.localhost` (key or signed URL) and a public port URL. | HTTP response from the sandbox's server. | [ ] | [x] | [x] |
-| 7 | Fork the sandbox. | The fork has `hello.py` and the full session history. | [ ] | [ ] | [ ] |
+| 7 | Fork the sandbox. | The fork has `hello.py` and the full session history. | [ ] | [x] | [x] |
 | 8 | Put the original to sleep. Send a message. | It wakes; the reply shows the earlier history. | [ ] | [x] | [x] |
 | 9 | Use a key from a second workspace to read the first workspace's files. From inside the second sandbox, try to reach the first over the network. | 401 or 404 for the key; network refused. | [ ] | [x] | [x] |
 | 10 | Call `/v1/usage`. | Running minutes, sleeping minutes and tokens for the sandbox. | [ ] | [x] | [x] |
@@ -42,3 +42,5 @@ Steps 1-5 pass on at least one template. If not, decide: continue, switch to Doc
 **Pi passes steps 1-6 and 8-10, Nov 12, 2026:** `TEMPLATE=pi npm run acceptance`, 40 of 40 checks in 51 s (Pi 1.5.2, `deepseek/deepseek-v4.1-flash` through the Vercel AI Gateway). The same run on fx also passes 40 of 40. Step 7 (fork) waits for the engine switch (SPEC decision 27).
 
 **eve passes steps 1-6 and 8-10, Nov 12, 2026:** `TEMPLATE=eve npm run acceptance`, 40 of 40 checks in 69 s (eve 1.0.0-rc.10 on Node 24, default project, `deepseek/deepseek-v4.1-flash`). The first turn includes starting the eve server (13.7 s); after sleep the shim restarts it and the session keeps its history. fx and Pi still pass 40 of 40 on the same build.
+
+**Step 7 passes on fx, Pi and eve, Nov 13, 2026:** `POST /v1/instances/{id}/fork` on sbx (template save + create, SPEC decision 27). The fork reaches `running` in 14-18 s (fx), 15-17 s (Pi) and 14-27 s (eve) over two rounds; it has `hello.py`; the same `session_id` on the fork answers that the file was `hello.py`; a file written on the fork is not on the source; the source is running again. `npm run acceptance` now runs steps 1-10: 46 checks.

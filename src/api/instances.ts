@@ -18,6 +18,7 @@ import {
   type UrlSigner,
 } from "../router/ports.ts";
 import type { Meter } from "../meter/meter.ts";
+import type { SessionStore } from "./agent.ts";
 import { usageWindow } from "./usage.ts";
 
 const port = z.number().int().min(1).max(65_535);
@@ -39,6 +40,8 @@ export interface PortsDeps {
   signer: UrlSigner;
   hostUrl: (label: string) => string;
   meter: Meter;
+  /** Agent API sessions; a fork gets a copy. */
+  sessions: SessionStore;
 }
 
 const createBody = z.object({
@@ -56,6 +59,18 @@ const createBody = z.object({
     .default(DEFAULT_IDLE_TIMEOUT_SECONDS),
   /** Permanent unauthenticated URLs (webhooks). */
   public_ports: z.array(publicPortBody).max(50).default([]),
+});
+
+const forkBody = z.object({
+  /** Default: the source's. */
+  metadata: z.record(z.string(), z.string()).optional(),
+  /** Default: the source's. */
+  idle_timeout_seconds: z
+    .number()
+    .int()
+    .min(MIN_IDLE_TIMEOUT_SECONDS)
+    .max(MAX_IDLE_TIMEOUT_SECONDS)
+    .optional(),
 });
 
 const execBody = z.object({
@@ -158,6 +173,21 @@ export function instancesRoutes(
       stderr: result.stderr,
       duration_ms: result.durationMs,
     });
+  });
+
+  // Fork: a new instance with a copy of this one's disk and sessions. Public ports and
+  // signed URLs are per instance and are not copied; neither is usage.
+  app.post("/:id/fork", async (c) => {
+    const id = c.req.param("id");
+    const body = forkBody.parse(await c.req.json().catch(() => ({})));
+    const template = service.get(id).template;
+    const fork = service.fork(id, {
+      ...body,
+      workspace_id: c.get("workspaceId"),
+      secrets: secretsForTemplate(template),
+    });
+    ports.sessions.copy(id, fork.id);
+    return c.json({ ...fork, public_ports: [] }, 201);
   });
 
   app.post("/:id/sleep", async (c) => c.json(await service.sleep(c.req.param("id"))));

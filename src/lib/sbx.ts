@@ -41,38 +41,74 @@ export interface RunOptions {
   onStdout?: (chunk: string) => void;
 }
 
-/** Run `sbx <args>` and return output and exit code. Never throws on a non-zero exit. */
+/** Exit code reported when sbx was killed for running past its timeout (like `timeout`). */
+export const SBX_TIMED_OUT = 124;
+
+/**
+ * Run `sbx <args>` and return output and exit code. Never throws on a non-zero exit.
+ * Past `timeoutMs` sbx is killed and the result is exit 124. On Windows a killed sbx can
+ * leave a child holding stdout open, so the result comes from the process exit, not from
+ * the pipes closing (a hung `sbx exec` once held a request for 20 minutes, Nov 13, 2026).
+ */
 export function runSbx(args: string[], options: RunOptions = {}): Promise<SbxResult> {
   const started = Date.now();
   return new Promise((resolve, reject) => {
-    const child = spawn("sbx", args, {
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-      timeout: options.timeoutMs,
-    });
+    const child = spawn("sbx", args, { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
+    let settled = false;
+    const finish = (code: number | null, signal: NodeJS.Signals | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(grace);
+      resolve({
+        stdout,
+        stderr: timedOut
+          ? `${stderr}\nsbx ${args[0] ?? ""} timed out after ${options.timeoutMs} ms`
+          : signal
+            ? `${stderr}\nkilled by ${signal}`
+            : stderr,
+        exitCode: timedOut ? SBX_TIMED_OUT : (code ?? -1),
+        durationMs: Date.now() - started,
+      });
+    };
+    let grace: ReturnType<typeof setTimeout> | undefined;
+    const timer = options.timeoutMs
+      ? setTimeout(() => {
+          timedOut = true;
+          child.kill();
+          // Do not wait on pipes a grandchild may hold; give the exit event a moment.
+          grace = setTimeout(() => finish(null, null), 5_000);
+        }, options.timeoutMs)
+      : undefined;
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
       stdout += chunk;
       options.onStdout?.(chunk);
     });
     child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
-    child.on("error", reject);
-    child.on("close", (code, signal) => {
-      resolve({
-        stdout,
-        stderr: signal ? `${stderr}\nkilled by ${signal}` : stderr,
-        exitCode: code ?? -1,
-        durationMs: Date.now() - started,
-      });
+    child.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err);
+    });
+    // Normally "close" (all output read). After a kill, "exit" is enough.
+    child.on("close", finish);
+    child.on("exit", (code, signal) => {
+      if (timedOut) finish(code, signal);
     });
     child.stdin.end(options.stdin ?? "");
   });
 }
 
+/** Management commands (ls, stop, rm, ports, policy) that take longer than this are stuck. */
+const MANAGEMENT_TIMEOUT_MS = 2 * 60_000;
+
 /** Run a management command (create, rm, stop, ls). Any non-zero exit is an error. */
 export async function runSbxOk(args: string[], options?: RunOptions): Promise<SbxResult> {
-  const result = await runSbx(args, options);
+  const result = await runSbx(args, { timeoutMs: MANAGEMENT_TIMEOUT_MS, ...options });
   if (result.exitCode !== 0) throw new SbxError(args, result);
   return result;
 }
@@ -199,6 +235,14 @@ export async function copyToSandbox(name: string, hostPath: string, sandboxPath:
 /** Snapshot a sandbox as a local template. The sandbox must be stopped (a running one prompts). */
 export async function saveTemplate(name: string, tag: string): Promise<void> {
   await runSbxOk(["template", "save", name, tag], { timeoutMs: 10 * 60_000 });
+}
+
+/**
+ * Remove a saved template image. Sandboxes already created from it keep working, also
+ * after a restart (sbx v0.50.1). Without --force sbx asks for confirmation on a terminal.
+ */
+export async function removeTemplate(tag: string): Promise<void> {
+  await runSbxOk(["template", "rm", "--force", tag]);
 }
 
 export interface CustomSecret {

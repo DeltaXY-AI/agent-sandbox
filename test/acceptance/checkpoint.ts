@@ -1,4 +1,4 @@
-// Acceptance: docs/TESTING.md steps 1-6 and 8-10 on one template (checkpoint, public ports,
+// Acceptance: docs/TESTING.md steps 1-10 on one template (checkpoint, public ports, fork,
 // sleep and wake, workspaces and isolation, usage), against a running server.
 // Run:  node --env-file=.env test/acceptance/checkpoint.ts            (template fx, port 3000)
 // Env:  TEMPLATE (default fx), PORT (default 3000), AGENT_SANDBOX_API_KEY, AGENT_SANDBOX_ADMIN_KEY
@@ -369,6 +369,74 @@ try {
       );
     } finally {
       if (idB) await call("DELETE", "localhost", `/v1/instances/${idB}`, asB);
+    }
+  }
+
+  // Step 7: fork. The fork has hello.py and the full session history; the two then diverge.
+  // Runs after step 9, whose network probe needs step 6's server (a fork restarts the source).
+  console.log("\n== step 7: fork");
+  const t7 = Date.now();
+  const forked = await api("POST", `/v1/instances/${id}/fork`, {
+    metadata: { purpose: "acceptance-fork" },
+  });
+  const forkId = forked.json?.id as string;
+  const forkKey = forked.json?.agent_key as string;
+  check(
+    "POST /fork -> 201, a new instance forked from this one",
+    forked.status === 201 && Boolean(forkId) && forkId !== id && forked.json?.forked_from === id,
+    `got ${forked.status} ${forkId}`,
+  );
+  try {
+    let forkStatus = "";
+    for (let t = Date.now(); Date.now() - t < 180_000;) {
+      forkStatus = (await api("GET", `/v1/instances/${forkId}`)).json?.status;
+      if (forkStatus === "running" || forkStatus === "failed") break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    check(
+      "the fork is running",
+      forkStatus === "running",
+      `${forkStatus}, ${((Date.now() - t7) / 1000).toFixed(1)}s`,
+    );
+    const source = await api("GET", `/v1/instances/${id}`);
+    check("the source is running again", source.json?.status === "running", source.json?.status);
+    const onFork = (method: string, path: string, body?: unknown) =>
+      call(method, `${forkId}.localhost`, path, { "x-agent-key": forkKey }, body);
+    const forkFile = await onFork("GET", "/v1/files/content?path=hello.py");
+    check(
+      "the fork has hello.py",
+      forkFile.status === 200 && /print/.test(forkFile.text),
+      `${forkFile.status} ${JSON.stringify(forkFile.text.slice(0, 40))}`,
+    );
+    const t7turn = Date.now();
+    const forkTurn = await onFork("POST", "/v1/responses", {
+      input:
+        "Without using any tools: what is the name of the Python file you created earlier in this conversation? Answer with just the file name.",
+      session_id: sessionId,
+    });
+    const forkReply = JSON.parse(forkTurn.text || "{}");
+    check(
+      "the same session_id on the fork remembers the conversation (hello.py)",
+      forkTurn.status === 200 &&
+        forkReply.status === "completed" &&
+        /hello\.py/i.test(forkReply.output_text ?? ""),
+      `${((Date.now() - t7turn) / 1000).toFixed(1)}s, ${JSON.stringify(forkReply.output_text?.slice(0, 80) ?? forkTurn.text.slice(0, 120))}`,
+    );
+    await api("POST", `/v1/instances/${forkId}/exec`, {
+      command: "echo b > /home/agent/fork-only.txt",
+    });
+    const diverge = await api("POST", `/v1/instances/${id}/exec`, {
+      command: "test -e /home/agent/fork-only.txt && echo shared || echo separate",
+    });
+    check(
+      "a file written on the fork is not on the source",
+      diverge.json?.stdout?.trim() === "separate",
+      diverge.json?.stdout?.trim(),
+    );
+  } finally {
+    if (forkId) {
+      const delFork = await api("DELETE", `/v1/instances/${forkId}`);
+      console.log(`fork cleanup: DELETE ${forkId} -> ${delFork.status}`);
     }
   }
 

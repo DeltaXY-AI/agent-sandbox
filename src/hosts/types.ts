@@ -62,5 +62,12 @@ export interface HostProvider {
   portAddress(name: string, port: number): Promise<{ host: string; port: number }>;
   /** Forget a cached address that stopped answering. */
   forgetPort(name: string, port: number): void;
+  /**
+   * Create a new sandbox (`spec`) whose disk is a copy of `source`'s: files, installed
+   * packages, the agent's session files. Not copied: running processes, create-time env
+   * (pass it again in `spec`), secrets (new ones come from `spec`). The source ends in
+   * the state it was in. sbx: stop, template save, create from it. Firecracker: snapshot.
+   */
+  fork(source: string, spec: SandboxSpec): Promise<HostSandbox>;
   delete(name: string): Promise<void>;
 }

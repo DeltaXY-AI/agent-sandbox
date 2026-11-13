@@ -10,6 +10,8 @@ import {
   listSandboxes,
   publishPort,
   removeSandbox,
+  removeTemplate,
+  saveTemplate,
   setCustomSecret,
   startSandbox,
   stopSandbox,
@@ -85,9 +87,62 @@ export class LocalWindowsHost implements HostProvider {
     return Object.keys(TEMPLATES);
   }
 
-  async createSandbox(spec: SandboxSpec): Promise<HostSandbox> {
+  createSandbox(spec: SandboxSpec): Promise<HostSandbox> {
     const template = TEMPLATES[spec.template];
     if (!template) throw new Error(`Unknown template ${spec.template}`);
+    return this.provision(spec, template.agent, template.image);
+  }
+
+  /**
+   * sbx has no fork. Stop the source, save it as a temporary template, create the fork
+   * from it, remove the template (the fork keeps working without it), and wake the source
+   * again if it was awake. Measured Nov 13, 2026 on fx: save 0.7 s, create 4.8 s.
+   */
+  async fork(source: string, spec: SandboxSpec): Promise<HostSandbox> {
+    const template = TEMPLATES[spec.template];
+    if (!template) throw new Error(`Unknown template ${spec.template}`);
+    const sandbox = (await listSandboxes()).find((s) => s.name === source);
+    if (!sandbox) throw new Error(`No sandbox ${source}`);
+    const wasAwake = sandbox.status === "running";
+    const times: string[] = [];
+    const timed = async <T>(label: string, work: () => Promise<T>): Promise<T> => {
+      const t = performance.now();
+      try {
+        return await work();
+      } finally {
+        times.push(`${label} ${((performance.now() - t) / 1000).toFixed(1)}s`);
+      }
+    };
+    // sbx saves only stopped sandboxes (a running one prompts on a terminal).
+    if (wasAwake) await timed("stop", () => this.sleep(source));
+    const tag = `agent-sandbox-fork:${spec.name}`;
+    let waking: Promise<void> | undefined;
+    const wakeSource = () => {
+      // Once the image is saved the source no longer needs to be off: wake it while the
+      // fork is created.
+      if (wasAwake && !waking) waking = timed("wake", () => this.wake(source));
+      return waking;
+    };
+    try {
+      await timed("save", () => saveTemplate(source, tag));
+      void wakeSource()?.catch(() => undefined); // awaited below
+      try {
+        return await timed("create", () => this.provision(spec, template.agent, tag));
+      } finally {
+        await removeTemplate(tag).catch((err: unknown) => {
+          console.error(`could not remove fork image ${tag}: ${String(err)}`);
+        });
+      }
+    } finally {
+      try {
+        await wakeSource();
+      } finally {
+        console.log(`fork ${source} -> ${spec.name}: ${times.join(", ")}`);
+      }
+    }
+  }
+
+  private async provision(spec: SandboxSpec, agent: string, image?: string) {
     // The sandbox gets a random placeholder; the sbx proxy swaps in the real value.
     const secrets = (spec.secrets ?? []).map((s) => ({
       ...s,
@@ -97,8 +152,8 @@ export class LocalWindowsHost implements HostProvider {
     for (const s of secrets) env[s.env] = s.placeholder;
     const sandbox = await createSandbox({
       name: spec.name,
-      agent: template.agent,
-      template: template.image,
+      agent,
+      template: image,
       env,
       cpus: spec.cpus,
       memory: spec.memory,

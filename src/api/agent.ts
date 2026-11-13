@@ -40,24 +40,41 @@ function publicSession(s: Session) {
   return copy;
 }
 
+/** Sessions per instance. In memory until a store is needed. */
+export class SessionStore {
+  private readonly byInstance = new Map<string, Map<string, Session>>();
+
+  of(instanceId: string): Map<string, Session> {
+    let map = this.byInstance.get(instanceId);
+    if (!map) this.byInstance.set(instanceId, (map = new Map()));
+    return map;
+  }
+
+  /**
+   * Give a fork the source's sessions under the same ids, so the same session_id continues
+   * the conversation there (the harness's own history is on the copied disk).
+   */
+  copy(fromInstanceId: string, toInstanceId: string): void {
+    const target = this.of(toInstanceId);
+    for (const s of this.of(fromInstanceId).values()) {
+      target.set(s.id, { ...s, usage: { ...s.usage }, active_response_id: null });
+    }
+  }
+}
+
 export interface AgentDeps {
   instances: InstanceService;
   harnesses: Record<string, HarnessAdapter>;
   defaultModel: string;
   /** Records each finished turn's tokens. */
   meter: Meter;
+  sessions: SessionStore;
 }
 
 type Env = { Bindings: { instanceId: string } };
 
 export function agentApp(deps: AgentDeps) {
-  /** Sessions per instance. In memory until a store is needed. */
-  const sessions = new Map<string, Map<string, Session>>();
-  const sessionsOf = (instanceId: string) => {
-    let map = sessions.get(instanceId);
-    if (!map) sessions.set(instanceId, (map = new Map()));
-    return map;
-  };
+  const sessionsOf = (instanceId: string) => deps.sessions.of(instanceId);
   /** Replay buffers per instance. */
   const responses = new Map<string, ResponseStore>();
   const responsesOf = (instanceId: string) => {

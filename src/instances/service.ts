@@ -35,6 +35,8 @@ export interface Instance {
   url: string;
   /** Key for the Agent API (X-Agent-Key). Absent on instances adopted after a restart. */
   agent_key?: string;
+  /** The instance this one was forked from. */
+  forked_from?: string;
   error?: string;
 }
 
@@ -46,6 +48,16 @@ export interface CreateInstanceInput {
   resources?: { cpu?: number; memory?: string };
   secrets?: SandboxSecret[];
   idle_timeout_seconds?: number;
+}
+
+export interface ForkInstanceInput {
+  workspace_id: string;
+  /** Default: the source's. */
+  metadata?: Record<string, string>;
+  /** Default: the source's. */
+  idle_timeout_seconds?: number;
+  /** Fresh secrets for the fork (the source's are not copied). */
+  secrets?: SandboxSecret[];
 }
 
 export class ApiError extends Error {
@@ -87,6 +99,10 @@ export class InstanceService {
   private readonly inFlight = new Map<string, number>();
   /** One wake per instance at a time; concurrent requests share it. */
   private readonly waking = new Map<string, Promise<void>>();
+  /** Sources being forked. Requests to them wait; lifecycle calls get 409. */
+  private readonly forking = new Map<string, Promise<void>>();
+  /** Create-time env per instance, reused by forks (the host does not keep it). Memory only. */
+  private readonly envs = new Map<string, Record<string, string>>();
   private readonly host: HostProvider;
   private readonly prefix: string;
   private readonly urlFor: (id: string) => string;
@@ -161,20 +177,84 @@ export class InstanceService {
   }
 
   create(input: CreateInstanceInput): Instance {
+    const instance = this.register({
+      workspace_id: input.workspace_id,
+      template: input.template,
+      metadata: input.metadata ?? {},
+      idle_timeout_seconds: input.idle_timeout_seconds ?? DEFAULT_IDLE_TIMEOUT_SECONDS,
+    });
+    if (input.env) this.envs.set(instance.id, input.env);
+    // Creation takes several seconds; the client polls GET /v1/instances/{id}.
+    this.provisionInBackground(instance.id, () =>
+      this.host.createSandbox({
+        name: instance.id,
+        template: input.template,
+        env: input.env,
+        secrets: input.secrets,
+        cpus: input.resources?.cpu,
+        memory: input.resources?.memory,
+      }),
+    );
+    return instance;
+  }
+
+  /**
+   * A new instance whose disk is a copy of `id`'s (SPEC section 3, fork). Returns at once
+   * in `provisioning`, like create. While the copy is taken the source is briefly off on
+   * the host: its requests wait for the fork, and sleep, stop, start, delete and another
+   * fork get 409 instance_busy. A source with work in flight (a turn, an exec, an open
+   * stream) is refused with 409 instance_busy, so no turn is cut in half.
+   */
+  fork(id: string, input: ForkInstanceInput): Instance {
+    const source = this.requireStatus(id, ["running", "sleeping", "stopped"]);
+    if ((this.inFlight.get(id) ?? 0) > 0) {
+      throw new ApiError(409, "instance_busy", `Instance ${id} has work in flight`);
+    }
+    const instance = this.register(
+      {
+        workspace_id: input.workspace_id,
+        template: source.template,
+        metadata: input.metadata ?? source.metadata,
+        idle_timeout_seconds: input.idle_timeout_seconds ?? source.idle_timeout_seconds,
+      },
+      id,
+    );
+    const env = this.envs.get(id);
+    if (env) this.envs.set(instance.id, env);
+    const copy = this.provisionInBackground(instance.id, () =>
+      this.host.fork(id, {
+        name: instance.id,
+        template: source.template,
+        env,
+        secrets: input.secrets,
+      }),
+    );
+    this.forking.set(
+      id,
+      copy.finally(() => {
+        this.forking.delete(id);
+        this.touch(id);
+      }),
+    );
+    return instance;
+  }
+
+  private register(
+    fields: Pick<Instance, "workspace_id" | "template" | "metadata" | "idle_timeout_seconds">,
+    forkedFrom?: string,
+  ): Instance {
     const id = `${this.prefix}${randomBytes(5).toString("hex")}`;
     const instance: Instance = {
       id,
-      workspace_id: input.workspace_id,
-      template: input.template,
+      ...fields,
       status: "provisioning",
       created_at: this.iso(),
       updated_at: this.iso(),
       last_active_at: this.iso(),
-      idle_timeout_seconds: input.idle_timeout_seconds ?? DEFAULT_IDLE_TIMEOUT_SECONDS,
-      metadata: input.metadata ?? {},
       url: this.urlFor(id),
       agent_key: `ak_${randomBytes(24).toString("hex")}`,
     };
+    if (forkedFrom) instance.forked_from = forkedFrom;
     this.instances.set(id, instance);
     this.reportState(id);
     this.records?.saveInstance({
@@ -186,24 +266,18 @@ export class InstanceService {
       metadata: instance.metadata,
       created_at: instance.created_at,
     });
-    // Creation takes several seconds; the client polls GET /v1/instances/{id}.
-    void this.host
-      .createSandbox({
-        name: id,
-        template: input.template,
-        env: input.env,
-        secrets: input.secrets,
-        cpus: input.resources?.cpu,
-        memory: input.resources?.memory,
-      })
-      .then(
-        () => {
-          this.touch(id);
-          this.setStatus(id, "running");
-        },
-        (err: unknown) => this.setStatus(id, "failed", String(err)),
-      );
     return { ...instance };
+  }
+
+  /** Run the host call that makes the sandbox; the instance goes running or failed. Never rejects. */
+  private provisionInBackground(id: string, make: () => Promise<unknown>): Promise<void> {
+    return make().then(
+      () => {
+        this.touch(id);
+        this.setStatus(id, "running");
+      },
+      (err: unknown) => this.setStatus(id, "failed", String(err)),
+    );
   }
 
   /** All instances, or only one workspace's. */
@@ -231,6 +305,8 @@ export class InstanceService {
     const actual = new Map((await this.host.list()).map((s) => [s.name, s.status]));
     for (const instance of this.instances.values()) {
       if (!["running", "sleeping", "stopped"].includes(instance.status)) continue;
+      // A source is briefly off on the host while it is copied; that is not a sleep.
+      if (this.forking.has(instance.id)) continue;
       const status = actual.get(instance.id);
       if (status === undefined) {
         this.setStatus(instance.id, "failed", "Sandbox no longer exists on the host");
@@ -275,6 +351,7 @@ export class InstanceService {
    * not-ready instances and 503 wake_timeout if waking takes too long.
    */
   async ensureAwake(id: string): Promise<void> {
+    await this.forking.get(id);
     const instance = this.get(id);
     if (instance.status === "running") return;
     if (instance.status === "sleeping" || instance.status === "waking") {
@@ -327,6 +404,7 @@ export class InstanceService {
     const slept: string[] = [];
     for (const instance of this.instances.values()) {
       if (instance.status !== "running" || (this.inFlight.get(instance.id) ?? 0) > 0) continue;
+      if (this.forking.has(instance.id)) continue;
       const idleMs = this.clock() - Date.parse(instance.last_active_at);
       if (idleMs < instance.idle_timeout_seconds * 1000) continue;
       try {
@@ -406,6 +484,7 @@ export class InstanceService {
     if (instance.status === "provisioning" || instance.status === "deleting") {
       throw new ApiError(409, "instance_busy", `Instance ${id} is ${instance.status}`);
     }
+    this.notForking(id);
     this.setStatus(id, "deleting");
     try {
       await this.host.delete(id);
@@ -420,6 +499,7 @@ export class InstanceService {
     this.onStateChange(id, instance.workspace_id, "deleted");
     this.instances.delete(id);
     this.inFlight.delete(id);
+    this.envs.delete(id);
     this.records?.deleteInstance(id);
   }
 
@@ -433,7 +513,15 @@ export class InstanceService {
     }
   }
 
+  private notForking(id: string): void {
+    if (this.forking.has(id)) {
+      throw new ApiError(409, "instance_busy", `Instance ${id} is being forked`);
+    }
+  }
+
+  /** For lifecycle calls: the status must be one of `allowed`, and no fork may be running. */
   private requireStatus(id: string, allowed: InstanceStatus[]): Instance {
+    this.notForking(id);
     const instance = this.get(id);
     if (!allowed.includes(instance.status)) {
       throw new ApiError(
